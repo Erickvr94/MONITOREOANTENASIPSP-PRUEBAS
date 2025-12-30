@@ -1,0 +1,8 @@
+node_modules/
+.env
+
+# WhatsApp authentication
+auth_info_baileys/
+
+# Windows reserved filenames
+nul
