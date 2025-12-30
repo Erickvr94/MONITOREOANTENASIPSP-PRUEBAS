@@ -213,7 +213,7 @@ function generarMensajeEstadoInicial(
   if (tieneConexion) {
     return `🔵 *SISTEMA INICIADO*
 
-📡 *Gateway ${id}*
+📡 *TAURA Gateway ${id}*
 🌐 IP: ${ip}
 📍 Sectores: ${sectores.join(", ")}
 
@@ -223,7 +223,7 @@ function generarMensajeEstadoInicial(
   } else {
     return `🔵 *SISTEMA INICIADO*
 
-📡 *Gateway ${id}*
+📡 *TAURA Gateway ${id}*
 🌐 IP: ${ip}
 📍 Sectores: ${sectores.join(", ")}
 
@@ -259,7 +259,7 @@ function generarMensajeAlerta(id, ip, sectores, tieneConexion, ultimoPing) {
   if (tieneConexion) {
     return `🟢 *COMUNICACIÓN RESTABLECIDA*
 
-📡 *Gateway ${id}*
+📡 *TAURA Gateway ${id}*
 🌐 IP: ${ip}
 📍 Sectores: ${sectores.join(", ")}
 
@@ -269,7 +269,7 @@ function generarMensajeAlerta(id, ip, sectores, tieneConexion, ultimoPing) {
   } else {
     return `🔴 *ALERTA: SIN COMUNICACIÓN*
 
-📡 *Gateway ${id}*
+📡 *TAURA Gateway ${id}*
 🌐 IP: ${ip}
 📍 Sectores afectados: ${sectores.join(", ")}
 
