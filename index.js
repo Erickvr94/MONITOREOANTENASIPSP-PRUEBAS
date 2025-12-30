@@ -62,7 +62,6 @@ async function ejecutarPing(host, count = 5) {
   }
 }
 
-
 /**
  * Verifica el estado de una IP realizando 5 verificaciones
  * @param {string} host - Dirección IP
@@ -105,13 +104,16 @@ async function verificarEstadoIP(host) {
   }
 
   // Hay comunicación si la mayoría de verificaciones fueron exitosas (3 o más de 5)
-  const hayComunicacion = verificacionesExitosas >= Math.ceil(totalVerificaciones / 2);
+  const hayComunicacion =
+    verificacionesExitosas >= Math.ceil(totalVerificaciones / 2);
 
   logger.info(`\n${"=".repeat(60)}`);
   logger.info(
     `Resultado final: ${verificacionesExitosas}/${totalVerificaciones} verificaciones exitosas`,
   );
-  logger.info(`Estado: ${hayComunicacion ? "✓ CON COMUNICACIÓN" : "✗ SIN COMUNICACIÓN"}`);
+  logger.info(
+    `Estado: ${hayComunicacion ? "✓ CON COMUNICACIÓN" : "✗ SIN COMUNICACIÓN"}`,
+  );
   logger.info("=".repeat(60));
 
   return {
@@ -147,12 +149,26 @@ async function monitorearTodas(whatsapp) {
     // Detectar cambio de estado y enviar alerta
     if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
       // Cambio de estado - enviar alerta
-      const mensaje = generarMensajeAlerta(id, IP, Sectores, estadoActual, ultimoPing);
+      const mensaje = generarMensajeAlerta(
+        id,
+        IP,
+        Sectores,
+        estadoActual,
+        ultimoPing,
+      );
       await enviarAlerta(whatsapp, mensaje);
     } else if (estadoAnterior === undefined) {
       // Primera verificación - informar estado inicial por WhatsApp
-      logger.info(`Estado inicial registrado: ${estadoActual ? "CON" : "SIN"} comunicación`);
-      const mensaje = generarMensajeEstadoInicial(id, IP, Sectores, estadoActual, ultimoPing);
+      logger.info(
+        `Estado inicial registrado: ${estadoActual ? "CON" : "SIN"} comunicación`,
+      );
+      const mensaje = generarMensajeEstadoInicial(
+        id,
+        IP,
+        Sectores,
+        estadoActual,
+        ultimoPing,
+      );
       await enviarAlerta(whatsapp, mensaje);
     } else {
       // Sin cambios - no enviar mensaje
@@ -174,7 +190,13 @@ async function monitorearTodas(whatsapp) {
  * @param {Object} ultimoPing - Datos del último ping
  * @returns {string} - Mensaje formateado
  */
-function generarMensajeEstadoInicial(id, ip, sectores, tieneConexion, ultimoPing) {
+function generarMensajeEstadoInicial(
+  id,
+  ip,
+  sectores,
+  tieneConexion,
+  ultimoPing,
+) {
   const fecha = new Date().toLocaleString("es-EC", {
     timeZone: "America/Guayaquil",
   });
@@ -285,7 +307,9 @@ async function enviarAlerta(whatsapp, mensaje) {
 async function main() {
   logger.info("╔═══════════════════════════════════════════════════════════╗");
   logger.info("║   SISTEMA DE MONITOREO DE ANTENAS Y GATEWAYS IPSP        ║");
-  logger.info("╚═══════════════════════════════════════════════════════════╝\n");
+  logger.info(
+    "╚═══════════════════════════════════════════════════════════╝\n",
+  );
 
   // Validar configuración
   if (Object.keys(direcciones).length === 0) {
@@ -295,9 +319,13 @@ async function main() {
 
   logger.info("⚙️  Configuración:");
   logger.info(`   - Gateways a monitorear: ${Object.keys(direcciones).length}`);
-  logger.info(`   - Intervalo de monitoreo: ${MONITOR_INTERVAL / 1000} segundos`);
+  logger.info(
+    `   - Intervalo de monitoreo: ${MONITOR_INTERVAL / 1000} segundos`,
+  );
   logger.info(`   - Verificaciones por ciclo: ${MAX_ERROR_COUNT}`);
-  logger.info(`   - Números WhatsApp: ${WHATSAPP_NUMBERS.join(", ") || "Ninguno"}\n`);
+  logger.info(
+    `   - Números WhatsApp: ${WHATSAPP_NUMBERS.join(", ") || "Ninguno"}\n`,
+  );
 
   // Inicializar WhatsApp
   const whatsapp = new WhatsAppService();
