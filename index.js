@@ -25,7 +25,6 @@ async function ejecutarPing(host, count = 5) {
   try {
     const { stdout } = await execPromise(`ping -n ${count} ${host}`, {
       timeout: 15000,
-      windowsHide: true, // Evita que se abran ventanas CMD en Windows
     });
 
     // Parsear resultados de Windows
