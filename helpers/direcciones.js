@@ -1,6 +1,6 @@
 const direcciones = {
   1: {
-    IP: "192.169.116.1",
+    IP: "192.168.116.1",
     Sectores: ["Garita", "Camaron", "Portillo"],
   },
   2: {
