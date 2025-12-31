@@ -22,10 +22,23 @@ const estadoGateways = {};
  * @returns {Object} - Resultado del ping
  */
 async function ejecutarPing(host, count = 5) {
+  // Usar ruta completa de ping.exe para evitar problemas de PATH
+  const pingCommand = `C:\\Windows\\System32\\ping.exe -n ${count} ${host}`;
+
   try {
-    const { stdout } = await execPromise(`ping -n ${count} ${host}`, {
+    logger.debug(`Ejecutando comando: ${pingCommand}`);
+
+    const { stdout, stderr } = await execPromise(pingCommand, {
       timeout: 15000,
+      windowsHide: true, // Evita que se abran ventanas CMD en Windows
     });
+
+    // Log del output completo para diagnóstico
+    if (stderr && stderr.trim().length > 0) {
+      logger.warn(`STDERR del ping a ${host}: ${stderr}`);
+    }
+
+    logger.debug(`STDOUT del ping a ${host}:\n${stdout}`);
 
     // Parsear resultados de Windows
     const perdidosMatch = stdout.match(/perdidos = (\d+)/);
@@ -49,8 +62,29 @@ async function ejecutarPing(host, count = 5) {
       tiempoPromedio,
     };
   } catch (error) {
-    // Si el comando falla, asumimos que todos los paquetes se perdieron
-    logger.warn(`Error ejecutando ping a ${host}: ${error.message}`);
+    // Capturar error detallado para diagnóstico
+    logger.error(`❌ ERROR EJECUTANDO PING a ${host}:`);
+    logger.error(`   Comando: ${pingCommand}`);
+    logger.error(`   Tipo de error: ${error.name}`);
+    logger.error(`   Mensaje: ${error.message}`);
+    logger.error(`   Código: ${error.code || "N/A"}`);
+
+    if (error.stdout) {
+      logger.error(`   STDOUT: ${error.stdout}`);
+    }
+    if (error.stderr) {
+      logger.error(`   STDERR: ${error.stderr}`);
+    }
+    if (error.killed) {
+      logger.error(`   Proceso terminado: ${error.killed}`);
+    }
+    if (error.signal) {
+      logger.error(`   Señal: ${error.signal}`);
+    }
+
+    // Stack trace completo
+    logger.error(`   Stack:\n${error.stack}`);
+
     return {
       exitoso: false,
       enviados: count,
@@ -58,6 +92,7 @@ async function ejecutarPing(host, count = 5) {
       recibidos: 0,
       porcentajePerdida: 100,
       tiempoPromedio: null,
+      error: error.message, // Agregamos el error para debugging
     };
   }
 }
