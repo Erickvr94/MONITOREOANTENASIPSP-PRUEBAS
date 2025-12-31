@@ -1,11 +1,8 @@
-import { exec } from "child_process";
-import { promisify } from "util";
+import ping from "ping";
 import { WhatsAppService } from "./services/WhatsAppService.js";
 import { direcciones } from "./helpers/direcciones.js";
 import logger from "./utils/logger.js";
 import "dotenv/config";
-
-const execPromise = promisify(exec);
 
 // Configuración desde .env
 const WHATSAPP_NUMBERS = process.env.WHATSAPP_NUMBERS?.split(",") || [];
@@ -16,74 +13,67 @@ const MAX_ERROR_COUNT = parseInt(process.env.MAX_ERROR_COUNT) || 5;
 const estadoGateways = {};
 
 /**
- * Ejecuta ping nativo de Windows a una IP
+ * Ejecuta ping a una IP usando el paquete 'ping' (más robusto que child_process)
  * @param {string} host - Dirección IP
  * @param {number} count - Número de paquetes a enviar
  * @returns {Object} - Resultado del ping
  */
 async function ejecutarPing(host, count = 5) {
-  // Usar ruta completa de ping.exe para evitar problemas de PATH
-  const pingCommand = `C:\\Windows\\System32\\ping.exe -n ${count} ${host}`;
-
   try {
-    logger.debug(`Ejecutando comando: ${pingCommand}`);
+    logger.debug(`Ejecutando ping a ${host} (${count} paquetes)`);
 
-    const { stdout, stderr } = await execPromise(pingCommand, {
-      timeout: 15000,
-      windowsHide: true, // Evita que se abran ventanas CMD en Windows
-    });
+    let exitosos = 0;
+    let tiempoTotal = 0;
+    const resultados = [];
 
-    // Log del output completo para diagnóstico
-    if (stderr && stderr.trim().length > 0) {
-      logger.warn(`STDERR del ping a ${host}: ${stderr}`);
+    // Ejecutar múltiples pings para obtener estadísticas
+    for (let i = 0; i < count; i++) {
+      const res = await ping.promise.probe(host, {
+        timeout: 3, // 3 segundos de timeout por ping
+        extra: ["-n", "1"], // Solo 1 paquete por intento
+      });
+
+      resultados.push(res);
+
+      if (res.alive) {
+        exitosos++;
+        if (res.time !== "unknown") {
+          tiempoTotal += parseFloat(res.time);
+        }
+      }
+
+      logger.debug(
+        `  Intento ${i + 1}/${count}: ${res.alive ? "✓" : "✗"} (${res.time}ms)`,
+      );
+
+      // Pequeña pausa entre pings (excepto el último)
+      if (i < count - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
     }
 
-    logger.debug(`STDOUT del ping a ${host}:\n${stdout}`);
+    const perdidos = count - exitosos;
+    const porcentajePerdida = Math.round((perdidos / count) * 100);
+    const tiempoPromedio =
+      exitosos > 0 ? Math.round(tiempoTotal / exitosos) : null;
 
-    // Parsear resultados de Windows
-    const perdidosMatch = stdout.match(/perdidos = (\d+)/);
-    const porcentajeMatch = stdout.match(/\((\d+)% perdidos\)/);
-    const enviados = count;
-    const perdidos = perdidosMatch ? parseInt(perdidosMatch[1]) : enviados;
-    const porcentajePerdida = porcentajeMatch
-      ? parseInt(porcentajeMatch[1])
-      : 100;
-
-    // Extraer tiempo promedio si está disponible
-    const tiempoMatch = stdout.match(/Media = (\d+)ms/);
-    const tiempoPromedio = tiempoMatch ? parseInt(tiempoMatch[1]) : null;
+    logger.debug(
+      `Resultado: ${exitosos}/${count} exitosos, ${porcentajePerdida}% pérdida`,
+    );
 
     return {
-      exitoso: perdidos < count,
-      enviados,
+      exitoso: exitosos > 0,
+      enviados: count,
       perdidos,
-      recibidos: enviados - perdidos,
+      recibidos: exitosos,
       porcentajePerdida,
       tiempoPromedio,
     };
   } catch (error) {
     // Capturar error detallado para diagnóstico
     logger.error(`❌ ERROR EJECUTANDO PING a ${host}:`);
-    logger.error(`   Comando: ${pingCommand}`);
-    logger.error(`   Tipo de error: ${error.name}`);
     logger.error(`   Mensaje: ${error.message}`);
-    logger.error(`   Código: ${error.code || "N/A"}`);
-
-    if (error.stdout) {
-      logger.error(`   STDOUT: ${error.stdout}`);
-    }
-    if (error.stderr) {
-      logger.error(`   STDERR: ${error.stderr}`);
-    }
-    if (error.killed) {
-      logger.error(`   Proceso terminado: ${error.killed}`);
-    }
-    if (error.signal) {
-      logger.error(`   Señal: ${error.signal}`);
-    }
-
-    // Stack trace completo
-    logger.error(`   Stack:\n${error.stack}`);
+    logger.error(`   Stack: ${error.stack}`);
 
     return {
       exitoso: false,
@@ -92,7 +82,7 @@ async function ejecutarPing(host, count = 5) {
       recibidos: 0,
       porcentajePerdida: 100,
       tiempoPromedio: null,
-      error: error.message, // Agregamos el error para debugging
+      error: error.message,
     };
   }
 }
