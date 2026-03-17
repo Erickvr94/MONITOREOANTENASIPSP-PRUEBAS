@@ -1,6 +1,9 @@
 import ping from "ping";
 import { WhatsAppService } from "./services/WhatsAppService.js";
+import { WebSocketService } from "./services/WebSocketService.js";
+import { consultarSNMP } from "./services/SNMPService.js";
 import { direcciones } from "./helpers/direcciones.js";
+import { direccionesIP } from "./helpers/ap_ptp.js";
 import logger from "./utils/logger.js";
 import "dotenv/config";
 
@@ -8,9 +11,18 @@ import "dotenv/config";
 const WHATSAPP_NUMBERS = process.env.WHATSAPP_NUMBERS?.split(",") || [];
 const MONITOR_INTERVAL = parseInt(process.env.MONITOR_INTERVAL) || 60000;
 const MAX_ERROR_COUNT = parseInt(process.env.MAX_ERROR_COUNT) || 5;
+const SNMP_INTERVAL = parseInt(process.env.SNMP_INTERVAL) || 30000;
 
-// Estado de cada gateway (para detectar cambios)
+// Estado de cada gateway (para detectar cambios y broadcasting)
 const estadoGateways = {};
+const detalleGateways = {};
+
+// Estado de dispositivos SNMP (AP/PTP)
+const estadoDispositivos = {};
+const detalleDispositivos = {};
+
+// Servicio WebSocket
+let wsService = null;
 
 /**
  * Ejecuta ping a una IP usando el paquete 'ping' (más robusto que child_process)
@@ -109,7 +121,7 @@ async function verificarEstadoIP(host) {
     ultimoPing = resultado; // Guardar el último resultado
 
     // Hay comunicación si se pierden menos de 3 paquetes (de 5)
-    const hayComunicacion = resultado.perdidos < 3;
+    let hayComunicacion = resultado.perdidos < 3;
 
     if (hayComunicacion) {
       verificacionesExitosas++;
@@ -129,15 +141,48 @@ async function verificarEstadoIP(host) {
   }
 
   // Hay comunicación si la mayoría de verificaciones fueron exitosas (3 o más de 5)
-  const hayComunicacion =
+  let hayComunicacion =
     verificacionesExitosas >= Math.ceil(totalVerificaciones / 2);
 
   logger.info(`\n${"=".repeat(60)}`);
   logger.info(
-    `Resultado final: ${verificacionesExitosas}/${totalVerificaciones} verificaciones exitosas`,
+    `Resultado inicial: ${verificacionesExitosas}/${totalVerificaciones} verificaciones exitosas`,
   );
   logger.info(
-    `Estado: ${hayComunicacion ? "✓ CON COMUNICACIÓN" : "✗ SIN COMUNICACIÓN"}`,
+    `Estado preliminar: ${hayComunicacion ? "✓ CON COMUNICACIÓN" : "✗ SIN COMUNICACIÓN"}`,
+  );
+
+  // Si el resultado fue SIN COMUNICACIÓN, hacer una verificación extra
+  // para detectar si la comunicación acaba de regresar
+  if (!hayComunicacion) {
+    logger.info(`\n${"=".repeat(60)}`);
+    logger.info("🔍 Realizando verificación extra para confirmar estado...");
+    logger.info("=".repeat(60));
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    const verificacionExtra = await ejecutarPing(host, 5);
+    ultimoPing = verificacionExtra; // Actualizar con la verificación extra
+
+    const comunicacionExtra = verificacionExtra.perdidos < 3;
+
+    if (comunicacionExtra) {
+      logger.info(
+        `✓ Verificación extra exitosa (${verificacionExtra.recibidos}/${verificacionExtra.enviados} paquetes recibidos)`,
+      );
+      logger.info("🟢 La comunicación acaba de regresar");
+      hayComunicacion = true; // Cambiar estado a CON COMUNICACIÓN
+    } else {
+      logger.warn(
+        `✗ Verificación extra fallida (${verificacionExtra.recibidos}/${verificacionExtra.enviados} paquetes recibidos)`,
+      );
+      logger.warn("🔴 Confirmado: SIN COMUNICACIÓN");
+    }
+  }
+
+  logger.info(`\n${"=".repeat(60)}`);
+  logger.info(
+    `Estado final: ${hayComunicacion ? "✓ CON COMUNICACIÓN" : "✗ SIN COMUNICACIÓN"}`,
   );
   logger.info("=".repeat(60));
 
@@ -168,8 +213,23 @@ async function monitorearTodas(whatsapp) {
     // Obtener estado anterior (undefined si es la primera vez)
     const estadoAnterior = estadoGateways[id];
 
-    // Guardar estado actual
+    // Guardar estado actual y detalle para WebSocket
     estadoGateways[id] = estadoActual;
+    detalleGateways[id] = {
+      ultimoPing,
+      ultimaActualizacion: new Date().toISOString(),
+    };
+
+    // Notificar a clientes WebSocket con el estado actualizado de este gateway
+    wsService?.broadcast({
+      tipo: "gateway_update",
+      id,
+      ip: IP,
+      sectores: Sectores,
+      online: estadoActual,
+      ultimoPing,
+      ultimaActualizacion: detalleGateways[id].ultimaActualizacion,
+    });
 
     // Detectar cambio de estado y enviar alerta
     if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
@@ -204,6 +264,9 @@ async function monitorearTodas(whatsapp) {
   }
 
   logger.info("\n✅ Ciclo de monitoreo completado\n");
+
+  // Broadcast del estado completo al terminar el ciclo de gateways
+  wsService?.broadcast(construirEstadoCompleto());
 }
 
 /**
@@ -236,8 +299,7 @@ function generarMensajeEstadoInicial(
     : "";
 
   if (tieneConexion) {
-    return `🔵 *SISTEMA INICIADO*
-
+    return `
 📡 *TAURA Gateway ${id}*
 🌐 IP: ${ip}
 📍 Sectores: ${sectores.join(", ")}
@@ -246,8 +308,7 @@ function generarMensajeEstadoInicial(
 
 🕐 ${fecha}`;
   } else {
-    return `🔵 *SISTEMA INICIADO*
-
+    return `
 📡 *TAURA Gateway ${id}*
 🌐 IP: ${ip}
 📍 Sectores: ${sectores.join(", ")}
@@ -327,6 +388,88 @@ async function enviarAlerta(whatsapp, mensaje) {
 }
 
 /**
+ * Construye el estado completo de todos los dispositivos para broadcasting WebSocket.
+ * @returns {object}
+ */
+function construirEstadoCompleto() {
+  const gateways = Object.entries(direcciones).reduce((acc, [id, gw]) => {
+    acc[id] = {
+      ip: gw.IP,
+      sectores: gw.Sectores,
+      online: estadoGateways[id] ?? null,
+      ...(detalleGateways[id] || {}),
+    };
+    return acc;
+  }, {});
+
+  const dispositivos = Object.entries(direccionesIP).reduce(
+    (acc, [grupo, devices]) => {
+      acc[grupo] = Object.entries(devices).reduce((dacc, [nombre, info]) => {
+        const key = `${grupo}.${nombre}`;
+        dacc[nombre] = {
+          ip: info.IP,
+          ubicacion: info.Ubicacion,
+          online: estadoDispositivos[key] ?? null,
+          ...(detalleDispositivos[key] || {}),
+        };
+        return dacc;
+      }, {});
+      return acc;
+    },
+    {},
+  );
+
+  return {
+    tipo: "estado_completo",
+    timestamp: new Date().toISOString(),
+    gateways,
+    dispositivos,
+  };
+}
+
+/**
+ * Monitorea todos los dispositivos AP/PTP vía SNMP en paralelo.
+ */
+async function monitorearDispositivos() {
+  logger.info("\n📶 Iniciando monitoreo SNMP de dispositivos AP/PTP...");
+
+  const tareas = [];
+
+  for (const [grupo, devices] of Object.entries(direccionesIP)) {
+    for (const [nombre, info] of Object.entries(devices)) {
+      const key = `${grupo}.${nombre}`;
+
+      tareas.push(
+        consultarSNMP(info.IP, info.OID).then((resultado) => {
+          const estadoAnterior = estadoDispositivos[key];
+          const estadoActual = resultado.online;
+
+          estadoDispositivos[key] = estadoActual;
+          detalleDispositivos[key] = {
+            uptime: resultado.uptime ?? null,
+            error: resultado.error ?? null,
+            ultimaActualizacion: new Date().toISOString(),
+          };
+
+          if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
+            logger.info(
+              `[SNMP] ${grupo} > ${nombre} (${info.IP}): ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
+            );
+          } else if (estadoAnterior === undefined) {
+            logger.info(
+              `[SNMP] ${grupo} > ${nombre} (${info.IP}): estado inicial ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
+            );
+          }
+        }),
+      );
+    }
+  }
+
+  await Promise.all(tareas);
+  logger.info("✅ Monitoreo SNMP completado\n");
+}
+
+/**
  * Función principal
  */
 async function main() {
@@ -342,43 +485,63 @@ async function main() {
     process.exit(1);
   }
 
+  // Contar dispositivos AP/PTP
+  const totalDispositivos = Object.values(direccionesIP).reduce(
+    (sum, grupo) => sum + Object.keys(grupo).length,
+    0,
+  );
+
   logger.info("⚙️  Configuración:");
   logger.info(`   - Gateways a monitorear: ${Object.keys(direcciones).length}`);
+  logger.info(`   - Dispositivos AP/PTP (SNMP): ${totalDispositivos}`);
   logger.info(
-    `   - Intervalo de monitoreo: ${MONITOR_INTERVAL / 1000} segundos`,
+    `   - Intervalo de monitoreo (ping): ${MONITOR_INTERVAL / 1000} segundos`,
+  );
+  logger.info(
+    `   - Intervalo de monitoreo (SNMP): ${SNMP_INTERVAL / 1000} segundos`,
   );
   logger.info(`   - Verificaciones por ciclo: ${MAX_ERROR_COUNT}`);
   logger.info(
     `   - Números WhatsApp: ${WHATSAPP_NUMBERS.join(", ") || "Ninguno"}\n`,
   );
 
-  // Inicializar WhatsApp
-  const whatsapp = new WhatsAppService();
+  // Inicializar WebSocket
+  wsService = new WebSocketService();
+  await wsService.start();
 
-  logger.info("📱 Conectando a WhatsApp...");
-  await whatsapp.connect();
-
-  // Esperar a que WhatsApp esté listo
-  await new Promise((resolve) => {
-    if (whatsapp.isConnected()) {
-      resolve();
-    } else {
-      whatsapp.once("ready", resolve);
-    }
+  // Enviar estado completo a cada nuevo cliente al conectarse
+  wsService.on("client_connected", (ws) => {
+    wsService.sendToClient(ws, construirEstadoCompleto());
   });
 
-  logger.info("✅ WhatsApp conectado y listo\n");
+  // Inicializar WhatsApp en segundo plano (no bloquea el monitoreo ni el WebSocket)
+  const whatsapp = new WhatsAppService();
+  logger.info("📱 Conectando a WhatsApp (en segundo plano)...");
+  whatsapp.connect().catch((err) => logger.error("Error al iniciar WhatsApp:", err));
+  whatsapp.on("ready", () => logger.info("✅ WhatsApp conectado y listo"));
+  whatsapp.on("logout", () =>
+    logger.warn("⚠️  WhatsApp cerrado. Las alertas por WhatsApp están deshabilitadas hasta reconectar."),
+  );
 
-  // Ejecutar primer monitoreo inmediatamente
-  await monitorearTodas(whatsapp);
+  // Ejecutar primer monitoreo inmediatamente sin esperar a WhatsApp
+  await Promise.all([monitorearTodas(whatsapp), monitorearDispositivos()]);
 
-  // Configurar monitoreo periódico
+  // Configurar monitoreo periódico de gateways (ping)
   setInterval(async () => {
     await monitorearTodas(whatsapp);
   }, MONITOR_INTERVAL);
 
+  // Configurar monitoreo periódico de dispositivos AP/PTP (SNMP)
+  setInterval(async () => {
+    await monitorearDispositivos();
+    wsService?.broadcast(construirEstadoCompleto());
+  }, SNMP_INTERVAL);
+
   logger.info(
-    `\n⏰ Monitoreo automático configurado cada ${MONITOR_INTERVAL / 1000} segundos`,
+    `\n⏰ Monitoreo ping configurado cada ${MONITOR_INTERVAL / 1000} segundos`,
+  );
+  logger.info(
+    `⏰ Monitoreo SNMP configurado cada ${SNMP_INTERVAL / 1000} segundos`,
   );
 }
 

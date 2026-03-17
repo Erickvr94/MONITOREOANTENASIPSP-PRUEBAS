@@ -4,101 +4,72 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WhatsApp-based monitoring bot for IPSP antennas and gateways (MonitoreoAntenasIPSP). Built with Node.js, this chatbot sends notifications about antenna/gateway status to designated WhatsApp numbers.
-
-**Key Dependencies:**
-- `@whiskeysockets/baileys` - WhatsApp Web API client
-- `pino` / `pino-pretty` - Structured logging
-- `qrcode-terminal` - QR code generation for WhatsApp authentication
-- `express` - HTTP server framework
+WhatsApp-based monitoring bot for IPSP antennas and gateways. Periodically pings gateway IPs (ICMP) and polls AP/PTP devices via SNMP, tracks status changes, sends WhatsApp alerts on connectivity changes, and broadcasts real-time status to WebSocket subscribers. Ecuador-centric (Taura sector gateways, +593 phone numbers).
 
 ## Commands
 
-### Running the Application
 ```bash
-npm start                 # Start the monitoring bot (runs index.js)
+npm start       # Start the monitoring bot (node index.js)
+npm install     # Install dependencies
 ```
 
-### Development
-```bash
-npm install              # Install dependencies
-```
-
-**Note:** There are no test scripts configured in this project.
+No test framework is configured.
 
 ## Architecture
 
-### Directory Structure
-```
-├── index.js                    # Main entry point (currently empty)
-├── services/
-│   └── WhatsAppService.js      # WhatsApp connection & messaging service
-├── helpers/
-│   └── direcciones.js          # Gateway/antenna IP addresses and sectors
-├── utils/
-│   └── logger.js               # Centralized Pino logger configuration
-└── .env                        # Environment configuration
-```
+**ES Modules** (`"type": "module"` in package.json) -- use `import`/`export`, not `require`.
 
-### Core Components
+### Flow
 
-#### WhatsAppService (services/WhatsAppService.js)
-Event-driven WhatsApp client wrapper extending EventEmitter. Manages connection lifecycle, QR authentication, and message sending.
+`index.js` (entry point) orchestrates two parallel monitoring loops:
+1. Starts `WebSocketService` (Express + ws) on `WS_PORT`
+2. Connects to WhatsApp via `WhatsAppService`, waits for `ready` event
+3. **Ping loop** (`MONITOR_INTERVAL`): for each gateway in `direcciones.js`, runs `MAX_ERROR_COUNT` verification rounds with 5 ICMP pings each. Majority vote determines state. Sends WhatsApp alerts on state changes. Broadcasts `gateway_update` + `estado_completo` via WebSocket.
+4. **SNMP loop** (`SNMP_INTERVAL`): polls all AP/PTP devices in `ap_ptp.js` in parallel via `net-snmp` (sysUpTime OID). Broadcasts `estado_completo` via WebSocket.
+5. New WebSocket clients immediately receive full state (`estado_completo`).
 
-**Key Methods:**
-- `connect()` - Establishes WhatsApp connection, handles QR code display
-- `sendMessage(to, message)` - Sends single message (assumes Ecuador +593 if no country code)
-- `sendBroadcast(recipients, message)` - Sends to multiple recipients with 1-second delays
-- `formatNumber(number)` - Converts phone numbers to WhatsApp JID format (`@s.whatsapp.net`)
+### Key Files
 
-**Events Emitted:**
-- `ready` - Connection established
-- `logout` - Session closed/logged out
-- `message` - Incoming message received (non-self messages)
-- `error` - Connection/operation error
+- **`index.js`** -- Monitoring loops, ping logic, SNMP orchestration, alert messages, state tracking, WebSocket broadcasting
+- **`services/WhatsAppService.js`** -- Baileys-based WhatsApp client (EventEmitter). Handles QR auth, reconnection, message sending. Auth state stored in `auth_info_baileys/` directory
+- **`services/WebSocketService.js`** -- Express + ws server (EventEmitter). Manages WebSocket clients, `broadcast()`, `sendToClient()`. Emits `client_connected`.
+- **`services/SNMPService.js`** -- `consultarSNMP(ip)` wraps net-snmp sysUpTime query; returns `{ online, uptime?, error? }`
+- **`helpers/direcciones.js`** -- Gateway config for ping monitoring: `{ id: { IP, Sectores[] } }`
+- **`helpers/ap_ptp.js`** -- AP/PTP device config for SNMP monitoring: `{ grupo: { nombre: { IP, Ubicacion } } }`
+- **`utils/logger.js`** -- Pino logger with pretty-print; level from `LOG_LEVEL` env var
 
-**Authentication:** Uses multi-file auth state stored in `auth_info_baileys/` directory. If session is logged out, delete this directory and re-scan QR code.
+### WebSocket Message Types
 
-**Connection Behavior:**
-- Shows QR code in terminal (max 5 attempts before reset)
-- Auto-reconnects on disconnection (unless logged out)
-- Browser identifier: "Antenas IPSP" / Chrome / 1.0.0
+- `estado_completo` -- Full snapshot of all gateways + dispositivos (sent on connect and after each full cycle)
+- `gateway_update` -- Single gateway result after each ping check
 
-#### Gateway/Antenna Configuration (helpers/direcciones.js)
-Static mapping of gateways to IP addresses and sectors:
-```javascript
-{
-  1: { IP: "192.169.116.1", Sectores: ["Garita", "Camaron", "Portillo"] },
-  2: { IP: "192.168.120.1", Sectores: ["La Luz", "Taura 4", "Taura 5", "Taura 6"] }
-}
-```
+### Key Dependencies
 
-#### Logger (utils/logger.js)
-Pino logger with pretty-printing configured. Log level controlled by `LOG_LEVEL` env var (default: "info").
+- `@whiskeysockets/baileys` -- WhatsApp Web API
+- `ping` -- Cross-platform ICMP ping
+- `net-snmp` -- SNMP v2c queries
+- `ws` -- WebSocket server
+- `express` -- HTTP server (shared with WebSocket)
+- `pino` / `pino-pretty` -- Logging
+- `dotenv` -- Environment config
 
-### Environment Variables (.env)
+## Environment Variables (.env)
 
-```bash
-WHATSAPP_NUMBERS=593984778678           # Comma-separated recipient numbers (no + prefix)
-MONITOR_INTERVAL=60000                  # Monitoring interval in milliseconds (60s)
-MAX_ERROR_COUNT=5                       # Max consecutive errors before marking offline
-```
+| Variable | Default | Description |
+|---|---|---|
+| `WHATSAPP_NUMBERS` | (none) | Comma-separated recipient numbers (no `+` prefix, e.g. `593984778678`) |
+| `MONITOR_INTERVAL` | `60000` | Ping cycle interval in ms |
+| `MAX_ERROR_COUNT` | `5` | Number of verification rounds per gateway per cycle |
+| `SNMP_INTERVAL` | `30000` | SNMP poll interval in ms |
+| `SNMP_COMMUNITY` | `public` | SNMP community string |
+| `SNMP_TIMEOUT` | `5000` | SNMP request timeout in ms |
+| `SNMP_RETRIES` | `1` | SNMP retries on timeout |
+| `WS_PORT` | `3000` | WebSocket/HTTP server port |
+| `LOG_LEVEL` | `info` | Pino log level |
 
 ## Important Notes
 
-- **ES Modules:** This project uses ES modules (`import`/`export`), not CommonJS
-- **Phone Number Format:** All phone numbers in international format WITHOUT the `+` sign (e.g., `593912345678`)
-- **WhatsApp Auth:** If WhatsApp disconnects due to logout, manually delete `auth_info_baileys/` directory
-- **Empty Entry Point:** `index.js` is currently empty and needs implementation of the monitoring logic
-- **No Git Repo:** This directory is not currently a git repository
-- **Ecuador-Centric:** Phone number formatter defaults to Ecuador country code (+593) for 9-digit numbers
-
-## Typical Implementation Pattern
-
-The main monitoring loop (to be implemented in index.js) should:
-1. Initialize WhatsAppService and wait for 'ready' event
-2. Set up periodic monitoring using `MONITOR_INTERVAL`
-3. Ping/check each gateway IP from `direcciones.js`
-4. Track consecutive error counts per gateway
-5. Send WhatsApp alerts when status changes or `MAX_ERROR_COUNT` exceeded
-6. Use the centralized logger for all logging operations
+- Phone numbers use international format WITHOUT `+` sign. 9-digit numbers auto-prefixed with `593` (Ecuador)
+- If WhatsApp session is logged out, delete `auth_info_baileys/` directory and re-scan QR
+- Ping uses `-n 1` flag (Windows-style) -- this runs on Windows
+- WhatsApp broadcast adds 1-second delay between recipients to avoid rate limits
