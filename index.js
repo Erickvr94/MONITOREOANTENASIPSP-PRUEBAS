@@ -2,6 +2,9 @@ import ping from "ping";
 import { WhatsAppService } from "./services/WhatsAppService.js";
 import { WebSocketService } from "./services/WebSocketService.js";
 import { consultarSNMP } from "./services/SNMPService.js";
+import { connectDatabase } from "./config/database.js";
+import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/users.js";
 import { direcciones } from "./helpers/direcciones.js";
 import { direccionesIP } from "./helpers/ap_ptp.js";
 import logger from "./utils/logger.js";
@@ -505,8 +508,13 @@ async function main() {
     `   - Números WhatsApp: ${WHATSAPP_NUMBERS.join(", ") || "Ninguno"}\n`,
   );
 
-  // Inicializar WebSocket
+  // Conectar base de datos
+  await connectDatabase();
+
+  // Inicializar WebSocket + HTTP server
   wsService = new WebSocketService();
+  wsService.use("/api/auth", authRoutes);
+  wsService.use("/api/users", userRoutes);
   await wsService.start();
 
   // Enviar estado completo a cada nuevo cliente al conectarse

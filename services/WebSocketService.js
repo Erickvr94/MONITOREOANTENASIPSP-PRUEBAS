@@ -11,9 +11,19 @@ export class WebSocketService extends EventEmitter {
     super();
     this.clients = new Set();
     this.app = express();
+    this.app.use(express.json());
     this.server = http.createServer(this.app);
     this.wss = new WebSocketServer({ server: this.server });
     this._setupHandlers();
+  }
+
+  /**
+   * Monta un router de Express en una ruta base.
+   * @param {string} path
+   * @param {Router} router
+   */
+  use(path, router) {
+    this.app.use(path, router);
   }
 
   _setupHandlers() {
