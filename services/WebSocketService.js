@@ -14,7 +14,11 @@ export class WebSocketService extends EventEmitter {
     this.app = express();
     this.app.use(
       cors({
-        origin: ["http://localhost:5173", "http://localhost:3000"],
+        origin: [
+          "http://localhost:5173",
+          "http://localhost:3000",
+          /^http:\/\/148\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/, // Coincide con http://148.x.x.x:puerto
+        ],
         credentials: true,
       }),
     );
