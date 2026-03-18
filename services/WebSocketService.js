@@ -14,11 +14,19 @@ export class WebSocketService extends EventEmitter {
     this.app = express();
     this.app.use(
       cors({
-        origin: [
-          "http://localhost:5173",
-          "http://localhost:3000",
-          /^http:\/\/192\.168\.148\.\d{1,3}(:\d+)?$/, // Coincide con http://192.168.148.xxx:puerto
-        ],
+        origin: function (origin, callback) {
+          // Permitir peticiones sin origin (como Postman o Server-to-Server)
+          if (!origin) return callback(null, true);
+
+          const isLocalhost = allowedOrigins.includes(origin);
+          const isSubnet148 = origin.startsWith("http://192.168.148.");
+
+          if (isLocalhost || isSubnet148) {
+            callback(null, true);
+          } else {
+            callback(new Error("Bloqueado por CORS: Origen no permitido"));
+          }
+        },
         credentials: true,
       }),
     );
