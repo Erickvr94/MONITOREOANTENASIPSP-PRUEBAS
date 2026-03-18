@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import logger from "../utils/logger.js";
 
 const MONGODB_URI =
-  process.env.MONGODB_URI || "mongodb://localhost:27017/dbSantaPriscila";
+  process.env.MONGODB_URI || "mongodb://localhost:27017/monitoreo";
 
 export async function connectDatabase() {
   try {
