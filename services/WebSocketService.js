@@ -14,18 +14,10 @@ export class WebSocketService extends EventEmitter {
     this.app = express();
     this.app.use(
       cors({
+        // Esta función permite cualquier origen dinámicamente
         origin: function (origin, callback) {
-          // Permitir peticiones sin origin (como Postman o Server-to-Server)
-          if (!origin) return callback(null, true);
-
-          const isLocalhost = allowedOrigins.includes(origin);
-          const isSubnet148 = origin.startsWith("http://192.168.148.");
-
-          if (isLocalhost || isSubnet148) {
-            callback(null, true);
-          } else {
-            callback(new Error("Bloqueado por CORS: Origen no permitido"));
-          }
+          // Si no hay origin (ej. Postman) o si lo hay, lo permitimos
+          callback(null, true);
         },
         credentials: true,
       }),
