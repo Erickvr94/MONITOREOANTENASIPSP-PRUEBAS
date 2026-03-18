@@ -5,6 +5,8 @@ import { consultarSNMP } from "./services/SNMPService.js";
 import { connectDatabase } from "./config/database.js";
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
+import historialRoutes from "./routes/historial.js";
+import { EstadoHistorico } from "./models/EstadoHistorico.js";
 import { direcciones } from "./helpers/direcciones.js";
 import { direccionesIP } from "./helpers/ap_ptp.js";
 import logger from "./utils/logger.js";
@@ -268,8 +270,8 @@ async function monitorearTodas(whatsapp) {
 
   logger.info("\n✅ Ciclo de monitoreo completado\n");
 
-  // Broadcast del estado completo al terminar el ciclo de gateways
-  wsService?.broadcast(construirEstadoCompleto());
+  // Broadcast del estado completo al terminar el ciclo de gateways y guardar historial
+  await broadcastYGuardar();
 }
 
 /**
@@ -431,6 +433,24 @@ function construirEstadoCompleto() {
 }
 
 /**
+ * Construye el estado completo, lo guarda en MongoDB y lo emite por WebSocket.
+ */
+async function broadcastYGuardar() {
+  const estado = construirEstadoCompleto();
+  wsService?.broadcast(estado);
+
+  try {
+    await EstadoHistorico.create({
+      timestamp: new Date(estado.timestamp),
+      gateways: estado.gateways,
+      dispositivos: estado.dispositivos,
+    });
+  } catch (error) {
+    logger.error(`Error al guardar historial: ${error.message}`);
+  }
+}
+
+/**
  * Monitorea todos los dispositivos AP/PTP vía SNMP en paralelo.
  */
 async function monitorearDispositivos() {
@@ -515,6 +535,7 @@ async function main() {
   wsService = new WebSocketService();
   wsService.use("/api/auth", authRoutes);
   wsService.use("/api/users", userRoutes);
+  wsService.use("/api/historial", historialRoutes);
   await wsService.start();
 
   // Enviar estado completo a cada nuevo cliente al conectarse
@@ -542,7 +563,7 @@ async function main() {
   // Configurar monitoreo periódico de dispositivos AP/PTP (SNMP)
   setInterval(async () => {
     await monitorearDispositivos();
-    wsService?.broadcast(construirEstadoCompleto());
+    await broadcastYGuardar();
   }, SNMP_INTERVAL);
 
   logger.info(

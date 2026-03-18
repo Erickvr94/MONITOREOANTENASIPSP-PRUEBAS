@@ -24,6 +24,9 @@ router.post("/login", async (req, res) => {
     const query = username ? { username } : { email };
     const user = await User.findOne(query);
 
+    console.log(user);
+    console.log(password);
+
     if (!user) {
       return res.status(401).json({ error: "Credenciales inválidas" });
     }

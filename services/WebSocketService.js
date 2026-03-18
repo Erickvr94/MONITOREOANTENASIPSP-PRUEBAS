@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import express from "express";
+import cors from "cors";
 import logger from "../utils/logger.js";
 
 const WS_PORT = parseInt(process.env.WS_PORT) || 3000;
@@ -11,6 +12,12 @@ export class WebSocketService extends EventEmitter {
     super();
     this.clients = new Set();
     this.app = express();
+    this.app.use(
+      cors({
+        origin: ["http://localhost:5173", "http://localhost:3000"],
+        credentials: true,
+      }),
+    );
     this.app.use(express.json());
     this.server = http.createServer(this.app);
     this.wss = new WebSocketServer({ server: this.server });

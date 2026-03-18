@@ -1,7 +1,7 @@
 export const direccionesIP = {
   "La Luz": {
     AP1: {
-      IP: "192.168.116.1",
+      IP: "192.168.122.1",
       Ubicacion: "Torre LA LUZ",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
     },
@@ -138,7 +138,7 @@ export const direccionesIP = {
       Ubicacion: "Torre Administracion",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
     },
-    "TORRE #3": {
+    "PTP-TORRE-3-ADMI": {
       IP: "192.168.118.5",
       Ubicacion: "TORRE TAURA 3",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
