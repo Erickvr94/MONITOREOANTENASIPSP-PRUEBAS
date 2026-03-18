@@ -17,7 +17,7 @@ export class WebSocketService extends EventEmitter {
         origin: [
           "http://localhost:5173",
           "http://localhost:3000",
-          /^http:\/\/148\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/, // Coincide con http://148.x.x.x:puerto
+          /^http:\/\/192\.168\.148\.\d{1,3}(:\d+)?$/, // Coincide con http://192.168.148.xxx:puerto
         ],
         credentials: true,
       }),
