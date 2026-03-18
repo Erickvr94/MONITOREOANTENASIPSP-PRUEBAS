@@ -14,11 +14,11 @@ export class WebSocketService extends EventEmitter {
     this.app = express();
     this.app.use(
       cors({
-        // Esta función permite cualquier origen dinámicamente
-        origin: function (origin, callback) {
-          // Si no hay origin (ej. Postman) o si lo hay, lo permitimos
-          callback(null, true);
-        },
+        origin: [
+          "http://localhost:5173",
+          "http://localhost:3000",
+          /^http:\/\/192\.168\.148\.\d{1,3}(:\d+)?$/, // Coincide con http://192.168.148.xxx:puerto
+        ],
         credentials: true,
       }),
     );
