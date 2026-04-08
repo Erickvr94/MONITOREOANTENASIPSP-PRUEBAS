@@ -41,7 +41,7 @@ No test framework, linter, or build step is configured. The app runs directly wi
 - **`middleware/authMiddleware.js`** -- `requireAuth` (JWT Bearer verification), `requireRole(...roles)` (role-based access)
 - **`routes/auth.js`** -- `POST /api/auth/login` (username or email + password → JWT), `GET /api/auth/me` (current user profile)
 - **`routes/users.js`** -- `POST /api/users` (create user, master role only)
-- **`routes/historial.js`** -- `GET /api/historial/ultima-hora` (last hour snapshots), `GET /api/historial/fecha/:fecha` (YYYY-MM-DD, Ecuador UTC-5)
+- **`routes/historial.js`** -- `GET /api/historial/ultima-hora` (last hour snapshots), `GET /api/historial/fecha/:fecha` (YYYY-MM-DD, Ecuador UTC-5), `GET /api/historial/caidas/:fecha` (downtime counts/percentages per gateway + device for a date), `GET /api/historial/caidas/:fechaInicio/:fechaFin` (downtime breakdown per day across a range)
 - **`helpers/direcciones.js`** -- Gateway config for ping monitoring: `{ id: { IP, Sectores[] } }`
 - **`helpers/ap_ptp.js`** -- AP/PTP device config for SNMP monitoring: `{ grupo: { nombre: { IP, Ubicacion, OID } } }`. Ubiquiti devices using OID `1.3.6.1.4.1.41112.1.4.7.1.3.1`
 - **`utils/logger.js`** -- Pino logger with pretty-print; level from `LOG_LEVEL` env var
@@ -60,6 +60,8 @@ No test framework, linter, or build step is configured. The app runs directly wi
 | POST | `/api/users` | Bearer JWT (master) | Create new user |
 | GET | `/api/historial/ultima-hora` | None | State snapshots from last hour |
 | GET | `/api/historial/fecha/:fecha` | None | State snapshots for a date (YYYY-MM-DD, Ecuador TZ) |
+| GET | `/api/historial/caidas/:fecha` | None | Downtime counts and % per gateway/device for a date |
+| GET | `/api/historial/caidas/:fechaInicio/:fechaFin` | None | Downtime breakdown per day across a date range |
 
 ## Environment Variables (.env)
 

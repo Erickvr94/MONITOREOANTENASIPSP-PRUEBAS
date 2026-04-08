@@ -25,6 +25,11 @@ const detalleGateways = {};
 // Estado de dispositivos SNMP (AP/PTP)
 const estadoDispositivos = {};
 const detalleDispositivos = {};
+// Errores consecutivos por dispositivo SNMP (se resetea al volver a estar online)
+const erroresConsecutivosDispositivos = {};
+// Marca si ya se envió una alerta de caída por WhatsApp para un dispositivo SNMP.
+// Evita enviar mensajes de recuperación sin su caída correspondiente.
+const alertaCaidaEnviada = {};
 
 // Servicio WebSocket
 let wsService = null;
@@ -451,11 +456,72 @@ async function broadcastYGuardar() {
 }
 
 /**
- * Monitorea todos los dispositivos AP/PTP vía SNMP en paralelo.
+ * Busca el gateway que cubre un sector dado.
+ * @param {string} grupo - Nombre del sector (ej: "Taura 4")
+ * @returns {{id: string, ip: string, online: boolean|undefined}|null}
  */
-async function monitorearDispositivos() {
+function encontrarGatewayPorSector(grupo) {
+  for (const [id, gw] of Object.entries(direcciones)) {
+    if (gw.Sectores.includes(grupo)) {
+      return { id, ip: gw.IP, online: estadoGateways[id] };
+    }
+  }
+  return null;
+}
+
+/**
+ * Mensaje de WhatsApp para alerta de antena SNMP caída.
+ */
+function generarMensajeAntenaCaida(grupo, nombre, info, erroresConsecutivos, errorMsg) {
+  const fecha = new Date().toLocaleString("es-EC", {
+    timeZone: "America/Guayaquil",
+  });
+  return `🚨 *ALERTA ANTENA CAIDA*
+
+🏢 *Sector:* ${grupo}
+📡 *Antena:* ${nombre}
+🌐 *IP:* ${info.IP}
+📍 Ubicacion: ${info.Ubicacion}
+🕐 *Hora:* ${fecha}
+❌ *Errores consecutivos:* ${erroresConsecutivos}
+⚠️ *Error:* ${errorMsg || "Sin respuesta SNMP"}`;
+}
+
+/**
+ * Mensaje de WhatsApp para recuperación de antena SNMP.
+ */
+function generarMensajeAntenaRecuperacion(grupo, nombre, info, resultado) {
+  const fecha = new Date().toLocaleString("es-EC", {
+    timeZone: "America/Guayaquil",
+  });
+  const senal = resultado.value != null ? `${resultado.value} dBm` : "N/D";
+  const count = resultado.count ?? 0;
+  return `✅ *RECUPERACIÓN*
+
+🏢 *Sector:* ${grupo}
+📡 *Antena:* ${nombre}
+🌐 *IP:* ${info.IP}
+📍 Ubicacion: ${info.Ubicacion}
+🟢 *Estado:* ONLINE
+🕐 *Hora:* ${fecha}
+📶 *Señal:* ${senal}
+📊 *Valores recibidos:* ${count}
+
+Antena funcionando normalmente`;
+}
+
+/**
+ * Monitorea todos los dispositivos AP/PTP vía SNMP en paralelo.
+ * Envía alertas por WhatsApp solo cuando:
+ *  - Caída: el gateway del sector está online (si el gateway también cayó o
+ *    el sector no tiene gateway mapeado, se suprime la alerta).
+ *  - Recuperación: previamente se envió la alerta de caída para ese dispositivo.
+ * @param {WhatsAppService} whatsapp - Servicio de WhatsApp
+ */
+async function monitorearDispositivos(whatsapp) {
   logger.info("\n📶 Iniciando monitoreo SNMP de dispositivos AP/PTP...");
 
+  const pendientes = [];
   const tareas = [];
 
   for (const [grupo, devices] of Object.entries(direccionesIP)) {
@@ -474,10 +540,19 @@ async function monitorearDispositivos() {
             ultimaActualizacion: new Date().toISOString(),
           };
 
+          // Contador de errores consecutivos (se resetea al volver online)
+          if (!estadoActual) {
+            erroresConsecutivosDispositivos[key] =
+              (erroresConsecutivosDispositivos[key] || 0) + 1;
+          } else {
+            erroresConsecutivosDispositivos[key] = 0;
+          }
+
           if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
             logger.info(
               `[SNMP] ${grupo} > ${nombre} (${info.IP}): ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
             );
+            pendientes.push({ grupo, nombre, info, key, resultado, estadoActual });
           } else if (estadoAnterior === undefined) {
             logger.info(
               `[SNMP] ${grupo} > ${nombre} (${info.IP}): estado inicial ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
@@ -489,6 +564,55 @@ async function monitorearDispositivos() {
   }
 
   await Promise.all(tareas);
+
+  // Broadcast + persistencia ANTES de enviar notificaciones: los clientes WebSocket
+  // y el historial en Mongo no deben esperar a que WhatsApp termine (cada alerta
+  // agrega ~1s por destinatario y puede acumular varios segundos de retraso).
+  await broadcastYGuardar();
+
+  // Procesar notificaciones pendientes en secuencia (evita bombardear a WhatsApp)
+  for (const p of pendientes) {
+    if (!p.estadoActual) {
+      // Caída: validar estado del gateway del sector
+      const gatewayInfo = encontrarGatewayPorSector(p.grupo);
+
+      if (!gatewayInfo) {
+        logger.info(
+          `[SNMP] ${p.grupo} > ${p.nombre}: sin gateway mapeado, alerta de caída suprimida`,
+        );
+        continue;
+      }
+      if (gatewayInfo.online !== true) {
+        logger.info(
+          `[SNMP] ${p.grupo} > ${p.nombre}: gateway ${gatewayInfo.id} (${gatewayInfo.ip}) caído o sin estado, alerta suprimida`,
+        );
+        continue;
+      }
+
+      const mensaje = generarMensajeAntenaCaida(
+        p.grupo,
+        p.nombre,
+        p.info,
+        erroresConsecutivosDispositivos[p.key] || 0,
+        p.resultado.error,
+      );
+      await enviarAlerta(whatsapp, mensaje);
+      alertaCaidaEnviada[p.key] = true;
+    } else {
+      // Recuperación: solo si previamente se envió la caída
+      if (!alertaCaidaEnviada[p.key]) continue;
+
+      const mensaje = generarMensajeAntenaRecuperacion(
+        p.grupo,
+        p.nombre,
+        p.info,
+        p.resultado,
+      );
+      await enviarAlerta(whatsapp, mensaje);
+      alertaCaidaEnviada[p.key] = false;
+    }
+  }
+
   logger.info("✅ Monitoreo SNMP completado\n");
 }
 
@@ -553,7 +677,7 @@ async function main() {
   );
 
   // Ejecutar primer monitoreo inmediatamente sin esperar a WhatsApp
-  await Promise.all([monitorearTodas(whatsapp), monitorearDispositivos()]);
+  await Promise.all([monitorearTodas(whatsapp), monitorearDispositivos(whatsapp)]);
 
   // Configurar monitoreo periódico de gateways (ping)
   setInterval(async () => {
@@ -561,9 +685,9 @@ async function main() {
   }, MONITOR_INTERVAL);
 
   // Configurar monitoreo periódico de dispositivos AP/PTP (SNMP)
+  // monitorearDispositivos ya hace broadcast + save internamente antes de notificar
   setInterval(async () => {
-    await monitorearDispositivos();
-    await broadcastYGuardar();
+    await monitorearDispositivos(whatsapp);
   }, SNMP_INTERVAL);
 
   logger.info(

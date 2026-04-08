@@ -32,7 +32,7 @@ export async function consultarSNMP(ip, oid) {
 
     session.on("error", (err) => {
       logger.debug(`[SNMP] Error de sesión ${ip}: ${err.message}`);
-      finish({ online: false, error: err.message });
+      finish({ online: false, error: err.message, count: 0 });
     });
 
     const resultados = [];
@@ -49,11 +49,12 @@ export async function consultarSNMP(ip, oid) {
       (error) => {
         if (error) {
           logger.debug(`[SNMP] Error consulta ${ip}: ${error.message}`);
-          finish({ online: false, error: error.message });
+          finish({ online: false, error: error.message, count: 0 });
         } else {
           finish({
             online: resultados.length > 0,
             value: resultados.length > 0 ? Number(resultados[0]) : null,
+            count: resultados.length,
           });
         }
       },
