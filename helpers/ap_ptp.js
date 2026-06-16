@@ -178,7 +178,77 @@ export const direccionesIP = {
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
     },
   },
-
+  "Cabala 1": {
+    EB_BOMBEO: {
+      IP: "192.168.115.5",
+      Ubicacion: "EB_BOMBEO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    PTP_CE_BOMBEO: {
+      IP: "192.168.115.6",
+      Ubicacion: "PTP_CE_BOMBEO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+  },
+  "Cabala 2": {
+    campamento_gps: {
+      IP: "192.168.112.3",
+      Ubicacion: "campamento_gps",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "Sub estacion": {
+      IP: "192.168.112.4",
+      Ubicacion: "Sub estacion",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    EB_BOMBEO: {
+      IP: "192.168.112.10",
+      Ubicacion: "EB_BOMBEO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    PTP_SUB_BOMBEO: {
+      IP: "192.168.112.11",
+      Ubicacion: "EB_BOMBEO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+  },
+  California: {
+    "AP-1": {
+      IP: "192.168.102.152",
+      Ubicacion: "Torre Piscinas 58",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "AP-2": {
+      IP: "192.168.102.153",
+      Ubicacion: "Torre Piscinas 58",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "AP-3": {
+      IP: "192.168.102.154",
+      Ubicacion: "Torre Piscinas 58",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "AP-4": {
+      IP: "192.168.102.155",
+      Ubicacion: "Torre Piscinas 58",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "AP-Campemento": {
+      IP: "192.168.102.156",
+      Ubicacion: "Torre Campamento",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    Cliente: {
+      IP: "192.168.102.157",
+      Ubicacion: "Torre Piscinas 58",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "AP-5": {
+      IP: "192.168.102.158",
+      Ubicacion: "Torre Piscinas 58",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+  },
   Chanduy: {
     "Chanduy-AP1-EB": {
       IP: "192.168.106.1",
@@ -273,6 +343,23 @@ export const direccionesIP = {
     "PTP-TORRE3-TORRE1": {
       IP: "192.168.106.29",
       Ubicacion: "TORRE FAB HIELO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+  },
+  Mexico: {
+    AP1: {
+      IP: "192.168.160.2",
+      Ubicacion: "Torre MEXICO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "PTP-HMI-CLIEN": {
+      IP: "192.168.160.3",
+      Ubicacion: "Torre MEXICO",
+      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
+    },
+    "PTP-HMI-PRIN": {
+      IP: "192.168.160.4",
+      Ubicacion: "HMI",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
     },
   },
