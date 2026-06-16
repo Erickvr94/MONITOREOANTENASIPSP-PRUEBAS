@@ -1,5 +1,4 @@
 import ping from "ping";
-import { WhatsAppService } from "./services/WhatsAppService.js";
 import { WebSocketService } from "./services/WebSocketService.js";
 import { consultarSNMP } from "./services/SNMPService.js";
 import { connectDatabase } from "./config/database.js";
@@ -13,7 +12,6 @@ import logger from "./utils/logger.js";
 import "dotenv/config";
 
 // Configuración desde .env
-const WHATSAPP_NUMBERS = process.env.WHATSAPP_NUMBERS?.split(",") || [];
 const MONITOR_INTERVAL = parseInt(process.env.MONITOR_INTERVAL) || 60000;
 const MAX_ERROR_COUNT = parseInt(process.env.MAX_ERROR_COUNT) || 5;
 const SNMP_INTERVAL = parseInt(process.env.SNMP_INTERVAL) || 30000;
@@ -27,9 +25,6 @@ const estadoDispositivos = {};
 const detalleDispositivos = {};
 // Errores consecutivos por dispositivo SNMP (se resetea al volver a estar online)
 const erroresConsecutivosDispositivos = {};
-// Marca si ya se envió una alerta de caída por WhatsApp para un dispositivo SNMP.
-// Evita enviar mensajes de recuperación sin su caída correspondiente.
-const alertaCaidaEnviada = {};
 
 // Servicio WebSocket
 let wsService = null;
@@ -202,11 +197,7 @@ async function verificarEstadoIP(host) {
   };
 }
 
-/**
- * Monitorea todas las IPs configuradas
- * @param {WhatsAppService} whatsapp - Servicio de WhatsApp
- */
-async function monitorearTodas(whatsapp) {
+async function monitorearTodas() {
   logger.info("\n🔍 Iniciando ciclo de monitoreo...\n");
 
   for (const [id, gateway] of Object.entries(direcciones)) {
@@ -241,32 +232,15 @@ async function monitorearTodas(whatsapp) {
       ultimaActualizacion: detalleGateways[id].ultimaActualizacion,
     });
 
-    // Detectar cambio de estado y enviar alerta
     if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
-      // Cambio de estado - enviar alerta
-      const mensaje = generarMensajeAlerta(
-        id,
-        IP,
-        Sectores,
-        estadoActual,
-        ultimoPing,
+      logger.info(
+        `Cambio de estado: ${estadoAnterior ? "CON" : "SIN"} → ${estadoActual ? "CON" : "SIN"} comunicación`,
       );
-      await enviarAlerta(whatsapp, mensaje);
     } else if (estadoAnterior === undefined) {
-      // Primera verificación - informar estado inicial por WhatsApp
       logger.info(
         `Estado inicial registrado: ${estadoActual ? "CON" : "SIN"} comunicación`,
       );
-      const mensaje = generarMensajeEstadoInicial(
-        id,
-        IP,
-        Sectores,
-        estadoActual,
-        ultimoPing,
-      );
-      await enviarAlerta(whatsapp, mensaje);
     } else {
-      // Sin cambios - no enviar mensaje
       logger.info(
         `Sin cambios en el estado (${estadoActual ? "CON" : "SIN"} comunicación)`,
       );
@@ -277,124 +251,6 @@ async function monitorearTodas(whatsapp) {
 
   // Broadcast del estado completo al terminar el ciclo de gateways y guardar historial
   await broadcastYGuardar();
-}
-
-/**
- * Genera mensaje de estado inicial para WhatsApp
- * @param {string} id - ID del gateway
- * @param {string} ip - Dirección IP
- * @param {string[]} sectores - Sectores
- * @param {boolean} tieneConexion - Estado actual
- * @param {Object} ultimoPing - Datos del último ping
- * @returns {string} - Mensaje formateado
- */
-function generarMensajeEstadoInicial(
-  id,
-  ip,
-  sectores,
-  tieneConexion,
-  ultimoPing,
-) {
-  const fecha = new Date().toLocaleString("es-EC", {
-    timeZone: "America/Guayaquil",
-  });
-
-  // Información del ping
-  const infoPing = ultimoPing
-    ? `\n📊 *Último Ping:*
-   • Enviados: ${ultimoPing.enviados}
-   • Recibidos: ${ultimoPing.recibidos}
-   • Perdidos: ${ultimoPing.perdidos}
-   • Pérdida: ${ultimoPing.porcentajePerdida}%${ultimoPing.tiempoPromedio ? `\n   • Tiempo: ${ultimoPing.tiempoPromedio}ms` : ""}`
-    : "";
-
-  if (tieneConexion) {
-    return `
-📡 *TAURA Gateway ${id}*
-🌐 IP: ${ip}
-📍 Sectores: ${sectores.join(", ")}
-
-✅ Estado inicial: CON COMUNICACIÓN${infoPing}
-
-🕐 ${fecha}`;
-  } else {
-    return `
-📡 *TAURA Gateway ${id}*
-🌐 IP: ${ip}
-📍 Sectores: ${sectores.join(", ")}
-
-⚠️ Estado inicial: SIN COMUNICACIÓN${infoPing}
-
-🕐 ${fecha}`;
-  }
-}
-
-/**
- * Genera mensaje de alerta para WhatsApp
- * @param {string} id - ID del gateway
- * @param {string} ip - Dirección IP
- * @param {string[]} sectores - Sectores afectados
- * @param {boolean} tieneConexion - Estado actual
- * @param {Object} ultimoPing - Datos del último ping
- * @returns {string} - Mensaje formateado
- */
-function generarMensajeAlerta(id, ip, sectores, tieneConexion, ultimoPing) {
-  const fecha = new Date().toLocaleString("es-EC", {
-    timeZone: "America/Guayaquil",
-  });
-
-  // Información del ping
-  const infoPing = ultimoPing
-    ? `\n📊 *Último Ping:*
-   • Enviados: ${ultimoPing.enviados}
-   • Recibidos: ${ultimoPing.recibidos}
-   • Perdidos: ${ultimoPing.perdidos}
-   • Pérdida: ${ultimoPing.porcentajePerdida}%${ultimoPing.tiempoPromedio ? `\n   • Tiempo: ${ultimoPing.tiempoPromedio}ms` : ""}`
-    : "";
-
-  if (tieneConexion) {
-    return `🟢 *COMUNICACIÓN RESTABLECIDA*
-
-📡 *TAURA Gateway ${id}*
-🌐 IP: ${ip}
-📍 Sectores: ${sectores.join(", ")}
-
-✅ La comunicación ha sido restablecida exitosamente.${infoPing}
-
-🕐 ${fecha}`;
-  } else {
-    return `🔴 *ALERTA: SIN COMUNICACIÓN*
-
-📡 *TAURA Gateway ${id}*
-🌐 IP: ${ip}
-📍 Sectores afectados: ${sectores.join(", ")}
-
-⚠️ Se ha perdido la comunicación con este gateway.${infoPing}
-
-🕐 ${fecha}`;
-  }
-}
-
-/**
- * Envía alerta por WhatsApp a todos los números configurados
- * @param {WhatsAppService} whatsapp - Servicio de WhatsApp
- * @param {string} mensaje - Mensaje a enviar
- */
-async function enviarAlerta(whatsapp, mensaje) {
-  if (WHATSAPP_NUMBERS.length === 0) {
-    logger.warn("⚠️  No hay números de WhatsApp configurados");
-    return;
-  }
-
-  logger.info("\n📱 Enviando alertas por WhatsApp...");
-  logger.info(`Mensaje:\n${mensaje}\n`);
-
-  const resultados = await whatsapp.sendBroadcast(WHATSAPP_NUMBERS, mensaje);
-
-  const exitosos = resultados.filter((r) => r.success).length;
-  logger.info(
-    `✅ Alertas enviadas: ${exitosos}/${WHATSAPP_NUMBERS.length} exitosas`,
-  );
 }
 
 /**
@@ -455,73 +311,10 @@ async function broadcastYGuardar() {
   }
 }
 
-/**
- * Busca el gateway que cubre un sector dado.
- * @param {string} grupo - Nombre del sector (ej: "Taura 4")
- * @returns {{id: string, ip: string, online: boolean|undefined}|null}
- */
-function encontrarGatewayPorSector(grupo) {
-  for (const [id, gw] of Object.entries(direcciones)) {
-    if (gw.Sectores.includes(grupo)) {
-      return { id, ip: gw.IP, online: estadoGateways[id] };
-    }
-  }
-  return null;
-}
 
-/**
- * Mensaje de WhatsApp para alerta de antena SNMP caída.
- */
-function generarMensajeAntenaCaida(grupo, nombre, info, erroresConsecutivos, errorMsg) {
-  const fecha = new Date().toLocaleString("es-EC", {
-    timeZone: "America/Guayaquil",
-  });
-  return `🚨 *ALERTA ANTENA CAIDA*
-
-🏢 *Sector:* ${grupo}
-📡 *Antena:* ${nombre}
-🌐 *IP:* ${info.IP}
-📍 Ubicacion: ${info.Ubicacion}
-🕐 *Hora:* ${fecha}
-❌ *Errores consecutivos:* ${erroresConsecutivos}
-⚠️ *Error:* ${errorMsg || "Sin respuesta SNMP"}`;
-}
-
-/**
- * Mensaje de WhatsApp para recuperación de antena SNMP.
- */
-function generarMensajeAntenaRecuperacion(grupo, nombre, info, resultado) {
-  const fecha = new Date().toLocaleString("es-EC", {
-    timeZone: "America/Guayaquil",
-  });
-  const senal = resultado.value != null ? `${resultado.value} dBm` : "N/D";
-  const count = resultado.count ?? 0;
-  return `✅ *RECUPERACIÓN*
-
-🏢 *Sector:* ${grupo}
-📡 *Antena:* ${nombre}
-🌐 *IP:* ${info.IP}
-📍 Ubicacion: ${info.Ubicacion}
-🟢 *Estado:* ONLINE
-🕐 *Hora:* ${fecha}
-📶 *Señal:* ${senal}
-📊 *Valores recibidos:* ${count}
-
-Antena funcionando normalmente`;
-}
-
-/**
- * Monitorea todos los dispositivos AP/PTP vía SNMP en paralelo.
- * Envía alertas por WhatsApp solo cuando:
- *  - Caída: el gateway del sector está online (si el gateway también cayó o
- *    el sector no tiene gateway mapeado, se suprime la alerta).
- *  - Recuperación: previamente se envió la alerta de caída para ese dispositivo.
- * @param {WhatsAppService} whatsapp - Servicio de WhatsApp
- */
-async function monitorearDispositivos(whatsapp) {
+async function monitorearDispositivos() {
   logger.info("\n📶 Iniciando monitoreo SNMP de dispositivos AP/PTP...");
 
-  const pendientes = [];
   const tareas = [];
 
   for (const [grupo, devices] of Object.entries(direccionesIP)) {
@@ -540,7 +333,6 @@ async function monitorearDispositivos(whatsapp) {
             ultimaActualizacion: new Date().toISOString(),
           };
 
-          // Contador de errores consecutivos (se resetea al volver online)
           if (!estadoActual) {
             erroresConsecutivosDispositivos[key] =
               (erroresConsecutivosDispositivos[key] || 0) + 1;
@@ -552,7 +344,6 @@ async function monitorearDispositivos(whatsapp) {
             logger.info(
               `[SNMP] ${grupo} > ${nombre} (${info.IP}): ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
             );
-            pendientes.push({ grupo, nombre, info, key, resultado, estadoActual });
           } else if (estadoAnterior === undefined) {
             logger.info(
               `[SNMP] ${grupo} > ${nombre} (${info.IP}): estado inicial ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
@@ -564,54 +355,7 @@ async function monitorearDispositivos(whatsapp) {
   }
 
   await Promise.all(tareas);
-
-  // Broadcast + persistencia ANTES de enviar notificaciones: los clientes WebSocket
-  // y el historial en Mongo no deben esperar a que WhatsApp termine (cada alerta
-  // agrega ~1s por destinatario y puede acumular varios segundos de retraso).
   await broadcastYGuardar();
-
-  // Procesar notificaciones pendientes en secuencia (evita bombardear a WhatsApp)
-  for (const p of pendientes) {
-    if (!p.estadoActual) {
-      // Caída: validar estado del gateway del sector
-      const gatewayInfo = encontrarGatewayPorSector(p.grupo);
-
-      if (!gatewayInfo) {
-        logger.info(
-          `[SNMP] ${p.grupo} > ${p.nombre}: sin gateway mapeado, alerta de caída suprimida`,
-        );
-        continue;
-      }
-      if (gatewayInfo.online !== true) {
-        logger.info(
-          `[SNMP] ${p.grupo} > ${p.nombre}: gateway ${gatewayInfo.id} (${gatewayInfo.ip}) caído o sin estado, alerta suprimida`,
-        );
-        continue;
-      }
-
-      const mensaje = generarMensajeAntenaCaida(
-        p.grupo,
-        p.nombre,
-        p.info,
-        erroresConsecutivosDispositivos[p.key] || 0,
-        p.resultado.error,
-      );
-      await enviarAlerta(whatsapp, mensaje);
-      alertaCaidaEnviada[p.key] = true;
-    } else {
-      // Recuperación: solo si previamente se envió la caída
-      if (!alertaCaidaEnviada[p.key]) continue;
-
-      const mensaje = generarMensajeAntenaRecuperacion(
-        p.grupo,
-        p.nombre,
-        p.info,
-        p.resultado,
-      );
-      await enviarAlerta(whatsapp, mensaje);
-      alertaCaidaEnviada[p.key] = false;
-    }
-  }
 
   logger.info("✅ Monitoreo SNMP completado\n");
 }
@@ -647,10 +391,7 @@ async function main() {
   logger.info(
     `   - Intervalo de monitoreo (SNMP): ${SNMP_INTERVAL / 1000} segundos`,
   );
-  logger.info(`   - Verificaciones por ciclo: ${MAX_ERROR_COUNT}`);
-  logger.info(
-    `   - Números WhatsApp: ${WHATSAPP_NUMBERS.join(", ") || "Ninguno"}\n`,
-  );
+  logger.info(`   - Verificaciones por ciclo: ${MAX_ERROR_COUNT}\n`);
 
   // Conectar base de datos
   await connectDatabase();
@@ -667,27 +408,15 @@ async function main() {
     wsService.sendToClient(ws, construirEstadoCompleto());
   });
 
-  // Inicializar WhatsApp en segundo plano (no bloquea el monitoreo ni el WebSocket)
-  const whatsapp = new WhatsAppService();
-  logger.info("📱 Conectando a WhatsApp (en segundo plano)...");
-  whatsapp.connect().catch((err) => logger.error("Error al iniciar WhatsApp:", err));
-  whatsapp.on("ready", () => logger.info("✅ WhatsApp conectado y listo"));
-  whatsapp.on("logout", () =>
-    logger.warn("⚠️  WhatsApp cerrado. Las alertas por WhatsApp están deshabilitadas hasta reconectar."),
-  );
+  // Ejecutar primer monitoreo inmediatamente
+  await Promise.all([monitorearTodas(), monitorearDispositivos()]);
 
-  // Ejecutar primer monitoreo inmediatamente sin esperar a WhatsApp
-  await Promise.all([monitorearTodas(whatsapp), monitorearDispositivos(whatsapp)]);
-
-  // Configurar monitoreo periódico de gateways (ping)
   setInterval(async () => {
-    await monitorearTodas(whatsapp);
+    await monitorearTodas();
   }, MONITOR_INTERVAL);
 
-  // Configurar monitoreo periódico de dispositivos AP/PTP (SNMP)
-  // monitorearDispositivos ya hace broadcast + save internamente antes de notificar
   setInterval(async () => {
-    await monitorearDispositivos(whatsapp);
+    await monitorearDispositivos();
   }, SNMP_INTERVAL);
 
   logger.info(

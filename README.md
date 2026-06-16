@@ -1,244 +1,179 @@
-# 📡 Sistema de Monitoreo de Antenas y Gateways IPSP
+# Sistema de Monitoreo de Antenas y Gateways IPSP
 
-Sistema automatizado de monitoreo de conectividad para antenas y gateways de IPSP con notificaciones en tiempo real vía WhatsApp.
+Sistema automatizado de monitoreo de conectividad para antenas y gateways de IPSP (Melacorp S.A, Ecuador). Combina ping ICMP para gateways y polling SNMP para dispositivos AP/PTP, con alertas en tiempo real por WhatsApp, streaming WebSocket y persistencia en MongoDB.
 
-## 🚀 Características
+## Características
 
-- **Monitoreo Automático**: Verificación continua de conectividad mediante ping a intervalos configurables
-- **Notificaciones WhatsApp**: Alertas instantáneas cuando cambia el estado de conexión de los gateways
-- **Verificación Robusta**: Sistema de 5 verificaciones con mayoría para evitar falsos positivos
-- **Detección de Cambios**: Solo notifica cuando realmente hay un cambio de estado (evita spam)
-- **Información Detallada**: Estadísticas de ping en cada notificación (paquetes perdidos, latencia, etc.)
-- **Logging Estructurado**: Registro completo de todas las operaciones con Pino
-- **Multi-Gateway**: Soporte para monitoreo simultáneo de múltiples gateways
+- **Monitoreo por ping**: Verificación ICMP secuencial de gateways con sistema de múltiples rondas para evitar falsos positivos
+- **Monitoreo SNMP**: Polling paralelo de dispositivos Ubiquiti AP/PTP vía SNMP v1
+- **Alertas WhatsApp**: Notificaciones automáticas al cambiar el estado de cualquier dispositivo
+- **Supresión inteligente de alertas**: Las alertas SNMP se suprimen si el gateway del sector también está caído
+- **WebSocket en tiempo real**: Clientes conectados reciben `estado_completo` y `gateway_update` inmediatamente
+- **API REST con JWT**: Endpoints para autenticación, gestión de usuarios e historial
+- **Historial en MongoDB**: Snapshots del estado completo tras cada ciclo de monitoreo
+- **Logging estructurado**: Pino con pretty-print configurable por nivel
 
-## 📋 Requisitos Previos
+## Requisitos
 
-- **Node.js**: v14 o superior
-- **npm**: v6 o superior
-- **Sistema Operativo**: Windows (usa comando `ping` nativo de Windows)
-- **WhatsApp**: Cuenta de WhatsApp activa para recibir/enviar notificaciones
+- Node.js v18 o superior
+- MongoDB (debe estar corriendo antes de iniciar la app)
+- Cuenta de WhatsApp activa
+- Conectividad de red hacia los gateways y dispositivos monitoreados
 
-## 🔧 Instalación
+## Instalación
 
-1. **Clonar el repositorio**
-   ```bash
-   git clone <url-del-repositorio>
-   cd MonitoreoAntenasIPSP
-   ```
+```bash
+git clone <url>
+cd MonitoreoAntenasIPSP
+npm install
+```
 
-2. **Instalar dependencias**
-   ```bash
-   npm install
-   ```
+Crea un archivo `.env` en la raíz (ver sección de variables de entorno).
 
-3. **Configurar variables de entorno**
-
-   Edita el archivo `.env` con tu configuración:
-   ```env
-   # Números de WhatsApp (formato internacional sin +)
-   WHATSAPP_NUMBERS=593984778678,593912345678
-
-   # Intervalo entre ciclos de monitoreo (en milisegundos)
-   MONITOR_INTERVAL=60000
-
-   # Número de verificaciones por ciclo
-   MAX_ERROR_COUNT=5
-
-   # Nivel de logging (debug, info, warn, error)
-   LOG_LEVEL=info
-   ```
-
-4. **Configurar gateways a monitorear**
-
-   Edita `helpers/direcciones.js`:
-   ```javascript
-   const direcciones = {
-     1: {
-       IP: "192.169.116.1",
-       Sectores: ["Garita", "Camaron", "Portillo"],
-     },
-     2: {
-       IP: "192.168.120.1",
-       Sectores: ["La Luz", "Taura 4", "Taura 5", "Taura 6"],
-     },
-     // Agrega más gateways según sea necesario
-   };
-   ```
-
-## 🚀 Uso
-
-### Iniciar el Sistema
+## Uso
 
 ```bash
 npm start
 ```
 
-### Primera Ejecución
+En la primera ejecución se muestra un código QR en la terminal. Escanéalo con WhatsApp para vincular la sesión. Una vez conectado, el monitoreo inicia de inmediato (no espera a WhatsApp).
 
-1. El sistema mostrará un código QR en la terminal
-2. Escanea el código QR con WhatsApp (vincula el dispositivo)
-3. Una vez conectado, comenzará el monitoreo automático
-4. Recibirás mensajes de "SISTEMA INICIADO" con el estado de cada gateway
+Para detener: `Ctrl + C`
 
-### Detener el Sistema
+## Variables de Entorno (.env)
 
-Presiona `Ctrl + C` en la terminal
+| Variable | Default | Descripción |
+|---|---|---|
+| `WHATSAPP_NUMBERS` | (none) | Números separados por coma, sin `+` (ej: `593984778678`) |
+| `MONITOR_INTERVAL` | `60000` | Intervalo ciclo ping en ms |
+| `MAX_ERROR_COUNT` | `5` | Rondas de verificación por gateway por ciclo |
+| `SNMP_INTERVAL` | `30000` | Intervalo ciclo SNMP en ms |
+| `SNMP_COMMUNITY` | `public` | Comunidad SNMP |
+| `SNMP_TIMEOUT` | `5000` | Timeout SNMP en ms |
+| `SNMP_RETRIES` | `4` | Reintentos SNMP en timeout |
+| `WS_PORT` | `3000` | Puerto HTTP/WebSocket |
+| `LOG_LEVEL` | `info` | Nivel de log Pino (`debug`, `info`, `warn`, `error`) |
+| `MONGODB_URI` | `mongodb://localhost:27017/monitoreo` | URI de conexión MongoDB |
+| `JWT_SECRET` | `changeme` | Secreto para firmar JWT |
+| `JWT_EXPIRES_IN` | `8h` | Expiración de tokens JWT |
 
-## 📊 Cómo Funciona
+## Configuración de Dispositivos
 
-### Proceso de Verificación
+### Gateways (ping) — `helpers/direcciones.js`
 
-Para cada gateway, el sistema ejecuta:
-
-1. **5 Verificaciones consecutivas** (cada 2 segundos)
-2. **Por cada verificación**:
-   - Ejecuta 1 ping enviando 5 paquetes
-   - Si se pierden < 3 paquetes → Verificación exitosa ✓
-   - Si se pierden ≥ 3 paquetes → Verificación fallida ✗
-3. **Resultado final**:
-   - Si ≥ 3 verificaciones son exitosas → **CON COMUNICACIÓN** 🟢
-   - Si ≥ 3 verificaciones fallan → **SIN COMUNICACIÓN** 🔴
-
-### Lógica de Notificaciones
-
-**Se envían mensajes solo cuando cambia el estado:**
-
-| Estado Anterior | Estado Actual | Acción |
-|----------------|---------------|--------|
-| Ninguno (inicio) | Cualquiera | 🔵 Envía estado inicial |
-| CON comunicación | SIN comunicación | 🔴 Envía alerta de pérdida |
-| SIN comunicación | CON comunicación | 🟢 Envía alerta de restablecimiento |
-| CON comunicación | CON comunicación | ⚪ No envía mensaje |
-| SIN comunicación | SIN comunicación | ⚪ No envía mensaje |
-
-## 📱 Formatos de Mensajes
-
-### 🔵 Sistema Iniciado
-```
-🔵 *SISTEMA INICIADO*
-
-📡 *Gateway 1*
-🌐 IP: 192.169.116.1
-📍 Sectores: Garita, Camaron, Portillo
-
-✅ Estado inicial: CON COMUNICACIÓN
-
-📊 *Último Ping:*
-   • Enviados: 5
-   • Recibidos: 5
-   • Perdidos: 0
-   • Pérdida: 0%
-   • Tiempo: 15ms
-
-🕐 30/12/2025, 10:30:45
+```js
+export const direcciones = {
+  1: { IP: "192.168.116.1", Sectores: ["Garita", "Camaron", "Portillo"] },
+  2: { IP: "192.168.120.1", Sectores: ["La Luz", "Taura 4", "Taura 5", "Taura 6"] },
+};
 ```
 
-### 🔴 Sin Comunicación
-```
-🔴 *ALERTA: SIN COMUNICACIÓN*
+### Dispositivos AP/PTP (SNMP) — `helpers/ap_ptp.js`
 
-📡 *Gateway 1*
-🌐 IP: 192.169.116.1
-📍 Sectores afectados: Garita, Camaron, Portillo
-
-⚠️ Se ha perdido la comunicación con este gateway.
-
-📊 *Último Ping:*
-   • Enviados: 5
-   • Recibidos: 0
-   • Perdidos: 5
-   • Pérdida: 100%
-
-🕐 30/12/2025, 12:30:45
+```js
+export const direccionesIP = {
+  "Nombre Sector": {
+    "NombreDispositivo": { IP: "x.x.x.x", Ubicacion: "...", OID: "1.3.6.1.4.1.41112..." },
+  },
+};
 ```
 
-### 🟢 Comunicación Restablecida
-```
-🟢 *COMUNICACIÓN RESTABLECIDA*
+El sector del dispositivo debe coincidir con un valor en `Sectores[]` del gateway correspondiente para que la supresión de alertas funcione correctamente.
 
-📡 *Gateway 1*
-🌐 IP: 192.169.116.1
-📍 Sectores: Garita, Camaron, Portillo
+## Cómo Funciona
 
-✅ La comunicación ha sido restablecida exitosamente.
+### Ciclo de Ping (gateways)
 
-📊 *Último Ping:*
-   • Enviados: 5
-   • Recibidos: 4
-   • Perdidos: 1
-   • Pérdida: 20%
-   • Tiempo: 28ms
+Por cada gateway:
+1. Ejecuta `MAX_ERROR_COUNT` rondas de 5 pings ICMP
+2. Cada ronda: si se pierden < 3 paquetes → ronda exitosa
+3. Si la mayoría de rondas son exitosas → **CON COMUNICACIÓN**
+4. Si el resultado es sin comunicación, se hace una ronda extra de verificación
+5. Al cambiar de estado se envía alerta WhatsApp
+6. Al primer ciclo se informa el estado inicial
+7. Emite `gateway_update` tras cada gateway, luego `estado_completo` + guarda en MongoDB al terminar el ciclo
 
-🕐 30/12/2025, 14:30:45
-```
+### Ciclo SNMP (AP/PTP)
 
-## 📁 Estructura del Proyecto
+1. Consulta todos los dispositivos en paralelo via `net-snmp` subtree
+2. Detecta cambios de estado
+3. Primero hace broadcast WebSocket + guarda en MongoDB
+4. Luego envía alertas WhatsApp en secuencia:
+   - **Caída**: solo si el gateway del sector está **online** (suprime si el gateway también cayó)
+   - **Recuperación**: solo si previamente se envió la alerta de caída
+
+### WebSocket
+
+Los clientes reciben al conectarse el estado completo. Mensajes:
+- `estado_completo` — snapshot de todos los gateways y dispositivos
+- `gateway_update` — resultado de un gateway individual tras su verificación ping
+
+## API REST
+
+| Método | Ruta | Auth | Descripción |
+|--------|------|------|-------------|
+| POST | `/api/auth/login` | — | Login (username/email + password) → JWT |
+| GET | `/api/auth/me` | Bearer JWT | Perfil del usuario actual |
+| POST | `/api/users` | Bearer JWT (master) | Crear nuevo usuario |
+| GET | `/api/historial/ultima-hora` | — | Snapshots de la última hora |
+| GET | `/api/historial/fecha/:fecha` | — | Snapshots de una fecha (YYYY-MM-DD, hora Ecuador) |
+| GET | `/api/historial/caidas/:fecha` | — | Conteo y % de caídas por dispositivo/gateway en una fecha |
+| GET | `/api/historial/caidas/:fechaInicio/:fechaFin` | — | Caídas desglosadas por día en un rango |
+
+## Estructura del Proyecto
 
 ```
 MonitoreoAntenasIPSP/
-├── index.js                    # Punto de entrada principal
+├── index.js                    # Punto de entrada, loops de monitoreo
 ├── services/
-│   └── WhatsAppService.js      # Servicio de WhatsApp (Baileys)
+│   ├── WhatsAppService.js      # Cliente Baileys (EventEmitter)
+│   ├── WebSocketService.js     # Express + ws (EventEmitter)
+│   └── SNMPService.js          # consultarSNMP() via net-snmp
+├── routes/
+│   ├── auth.js                 # /api/auth/login, /api/auth/me
+│   ├── users.js                # /api/users
+│   └── historial.js            # /api/historial/*
+├── models/
+│   ├── EstadoHistorico.js      # Mongoose: snapshots de estado
+│   └── User.js                 # Mongoose: usuarios con roles
+├── middleware/
+│   └── authMiddleware.js       # requireAuth, requireRole
 ├── helpers/
-│   └── direcciones.js          # Configuración de gateways
+│   ├── direcciones.js          # Config gateways (ping)
+│   └── ap_ptp.js               # Config dispositivos AP/PTP (SNMP)
+├── config/
+│   └── database.js             # Conexión Mongoose
 ├── utils/
-│   └── logger.js               # Logger centralizado (Pino)
-├── .env                        # Variables de entorno
-├── package.json                # Dependencias del proyecto
-├── README.md                   # Este archivo
-└── CLAUDE.md                   # Guía para Claude Code
+│   └── logger.js               # Pino logger
+├── auth_info_baileys/          # Sesión WhatsApp (no commitear)
+├── .env                        # Variables de entorno (no commitear)
+├── package.json
+└── CLAUDE.md
 ```
 
-## 🔍 Solución de Problemas
+## Solución de Problemas
 
-### El código QR no aparece
-- Verifica que no exista la carpeta `auth_info_baileys/`
-- Si existe, elimínala y vuelve a ejecutar `npm start`
+**QR no aparece / sesión inválida**: Elimina la carpeta `auth_info_baileys/` y vuelve a ejecutar `npm start`.
 
-### WhatsApp se desconecta constantemente
-- Asegúrate de tener buena conexión a internet
-- No cierres WhatsApp en tu teléfono
-- Verifica que no tengas WhatsApp Web abierto en otro navegador
+**MongoDB no conecta**: El error es fatal. Asegúrate de que MongoDB esté corriendo antes de iniciar.
 
-### No se reciben mensajes
-- Verifica que los números en `.env` estén en formato correcto (sin `+`)
-- Ejemplo correcto: `593984778678`
-- Ejemplo incorrecto: `+593984778678` o `0984778678`
+**No llegan mensajes WhatsApp**: Verifica que los números en `WHATSAPP_NUMBERS` estén en formato internacional sin `+` (ej: `593984778678`).
 
-### Los pings fallan constantemente
-- Verifica que las IPs en `helpers/direcciones.js` sean correctas
-- Confirma que tienes conectividad de red hacia esas IPs
-- Prueba hacer ping manual: `ping 192.169.116.1`
+**Alertas de antenas suprimidas sin razón aparente**: El gateway del sector debe estar online para que se envíen alertas de dispositivos. Revisa `helpers/direcciones.js` y que el nombre del grupo en `ap_ptp.js` coincida con un sector del gateway.
 
-### Error "Cannot find module"
-- Ejecuta `npm install` nuevamente
-- Verifica que tengas Node.js v14 o superior: `node --version`
+## Tecnologías
 
-## 🛠️ Tecnologías Utilizadas
+- **Node.js** (ES Modules)
+- **@whiskeysockets/baileys** — Cliente WhatsApp Web
+- **net-snmp** — Polling SNMP v1
+- **ping** — ICMP ping
+- **ws** — WebSocket server
+- **Express 5** — HTTP/REST API
+- **Mongoose** — ODM MongoDB
+- **jsonwebtoken + bcryptjs** — Auth JWT
+- **Pino** — Logger estructurado
 
-- **Node.js**: Entorno de ejecución
-- **@whiskeysockets/baileys**: Cliente de WhatsApp Web
-- **Pino**: Logger de alto rendimiento
-- **Express**: Framework HTTP (preparado para futura API)
-- **dotenv**: Gestión de variables de entorno
+## Autor
 
-## 📝 Notas
-
-- El sistema usa el comando `ping` nativo de Windows
-- Los números de teléfono deben estar en formato internacional sin `+`
-- Por defecto, el sistema asume código de país de Ecuador (+593) si no se especifica
-- La autenticación de WhatsApp se guarda en `auth_info_baileys/` (ya incluido en `.gitignore`)
-
-## 👤 Autor
-
-**Jefferson Cabello**
-Desarrollado para Melacorp S.A
-
-## 📄 Licencia
-
-ISC
-
----
-
-⚡ **Sistema de Monitoreo IPSP** - Mantén tus gateways bajo vigilancia 24/7
+Jefferson Cabello — Melacorp S.A  
+Licencia: ISC

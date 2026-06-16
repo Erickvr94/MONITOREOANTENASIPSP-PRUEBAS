@@ -31,10 +31,10 @@ No test framework, linter, or build step is configured. The app runs directly wi
 
 ### Key Files
 
-- **`index.js`** -- Entry point. Monitoring loops, ping logic, SNMP orchestration, WhatsApp alert formatting, in-memory state tracking (`estadoGateways`, `estadoDispositivos`), WebSocket broadcasting, MongoDB persistence via `broadcastYGuardar()`
+- **`index.js`** -- Entry point. Monitoring loops, ping logic, SNMP orchestration, WhatsApp alert formatting, in-memory state tracking (`estadoGateways`, `estadoDispositivos`, `detalleGateways`, `detalleDispositivos`, `erroresConsecutivosDispositivos`, `alertaCaidaEnviada`), WebSocket broadcasting, MongoDB persistence via `broadcastYGuardar()`
 - **`services/WhatsAppService.js`** -- Baileys-based WhatsApp client (EventEmitter). QR auth via terminal, auto-reconnection on non-logout disconnects. Auth state in `auth_info_baileys/`. Emits `ready`, `logout`, `message`
 - **`services/WebSocketService.js`** -- Express app + ws server sharing one `http.Server` (EventEmitter). Exposes `use(path, router)` to mount Express routes, `broadcast(data)`, `sendToClient(ws, data)`. CORS configured for localhost and 192.168.148.x subnet. Emits `client_connected`
-- **`services/SNMPService.js`** -- `consultarSNMP(ip, oid)` uses SNMP v1 subtree query; returns `{ online, value?, error? }`
+- **`services/SNMPService.js`** -- `consultarSNMP(ip, oid)` uses SNMP v1 subtree query; returns `{ online, value?, count, error? }` where `count` is the number of varbinds received and `value` is the first numeric result
 - **`config/database.js`** -- Mongoose connection to MongoDB (`MONGODB_URI` env var)
 - **`models/EstadoHistorico.js`** -- Mongoose model `IPSPEstadosHistorico`: `{ timestamp, gateways (Mixed), dispositivos (Mixed) }`. Stores full state snapshots each monitoring cycle
 - **`models/User.js`** -- Mongoose model: `{ username, email, name, password (bcrypt), role (master|admin|user) }`
@@ -73,7 +73,7 @@ No test framework, linter, or build step is configured. The app runs directly wi
 | `SNMP_INTERVAL` | `30000` | SNMP poll interval in ms |
 | `SNMP_COMMUNITY` | `public` | SNMP community string |
 | `SNMP_TIMEOUT` | `5000` | SNMP request timeout in ms |
-| `SNMP_RETRIES` | `1` | SNMP retries on timeout |
+| `SNMP_RETRIES` | `4` | SNMP retries on timeout |
 | `WS_PORT` | `3000` | WebSocket/HTTP server port |
 | `LOG_LEVEL` | `info` | Pino log level |
 | `MONGODB_URI` | `mongodb://localhost:27017/monitoreo` | MongoDB connection string |
@@ -91,3 +91,8 @@ No test framework, linter, or build step is configured. The app runs directly wi
 - SNMP queries use v1 protocol (not v2c) with subtree method
 - All dates displayed in WhatsApp messages use Ecuador timezone (`America/Guayaquil`)
 - The historial date endpoint interprets dates as Ecuador local time (UTC-5)
+- **SNMP alert suppression**: when a device goes offline, its WhatsApp alert is suppressed if the gateway covering that sector (`encontrarGatewayPorSector`) is also offline or has no known state. Recovery alerts are only sent if a prior downtime alert was sent (`alertaCaidaEnviada[key]`)
+- **SNMP broadcast order**: `broadcastYGuardar()` is called before processing WhatsApp notifications so WebSocket clients and MongoDB are never delayed by WhatsApp send latency
+- `erroresConsecutivosDispositivos[key]` increments on each consecutive SNMP failure and resets to 0 on recovery; included in downtime alerts
+- `detalleGateways[id]` stores `{ ultimoPing, ultimaActualizacion }` for the WebSocket `gateway_update` payload
+- `detalleDispositivos[key]` stores `{ uptime: null, error, ultimaActualizacion }` (`uptime` is always `null` since the SNMP result has no uptime field)
