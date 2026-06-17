@@ -2,8 +2,8 @@ import { EventEmitter } from "events";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import express from "express";
-import cors from "cors";
 import logger from "../utils/logger.js";
+import { requireInternalToken } from "../middleware/authMiddleware.js";
 
 const WS_PORT = parseInt(process.env.WS_PORT) || 3000;
 
@@ -12,17 +12,8 @@ export class WebSocketService extends EventEmitter {
     super();
     this.clients = new Set();
     this.app = express();
-    this.app.use(
-      cors({
-        origin: [
-          "http://localhost:5173",
-          "http://localhost:3000",
-          /^http:\/\/192\.168\.148\.\d{1,3}(:\d+)?$/, // Coincide con http://192.168.148.xxx:puerto
-        ],
-        credentials: true,
-      }),
-    );
     this.app.use(express.json());
+    this.app.use("/api", requireInternalToken);
     this.server = http.createServer(this.app);
     this.wss = new WebSocketServer({ server: this.server });
     this._setupHandlers();
@@ -40,6 +31,13 @@ export class WebSocketService extends EventEmitter {
   _setupHandlers() {
     this.wss.on("connection", (ws, req) => {
       const clientIp = req.socket.remoteAddress;
+
+      if (req.headers["x-internal-token"] !== process.env.INTERNAL_TOKEN) {
+        logger.warn(`[WS] Conexión rechazada (token inválido): ${clientIp}`);
+        ws.close(1008, "No autorizado");
+        return;
+      }
+
       logger.info(`[WS] Cliente conectado: ${clientIp}`);
       this.clients.add(ws);
 
@@ -87,8 +85,8 @@ export class WebSocketService extends EventEmitter {
 
   start() {
     return new Promise((resolve, reject) => {
-      this.server.listen(WS_PORT, () => {
-        logger.info(`[WS] Servidor escuchando en ws://localhost:${WS_PORT}`);
+      this.server.listen(WS_PORT, "127.0.0.1", () => {
+        logger.info(`[WS] Servidor escuchando en ws://127.0.0.1:${WS_PORT}`);
         resolve();
       });
       this.server.on("error", reject);

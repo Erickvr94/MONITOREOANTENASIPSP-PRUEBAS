@@ -2,8 +2,6 @@ import ping from "ping";
 import { WebSocketService } from "./services/WebSocketService.js";
 import { consultarSNMP } from "./services/SNMPService.js";
 import { connectDatabase } from "./config/database.js";
-import authRoutes from "./routes/auth.js";
-import userRoutes from "./routes/users.js";
 import historialRoutes from "./routes/historial.js";
 import { EstadoHistorico } from "./models/EstadoHistorico.js";
 import { direcciones } from "./helpers/direcciones.js";
@@ -398,9 +396,7 @@ async function main() {
 
   // Inicializar WebSocket + HTTP server
   wsService = new WebSocketService();
-  wsService.use("/api/auth", authRoutes);
-  wsService.use("/api/users", userRoutes);
-  wsService.use("/api/historial", historialRoutes);
+  wsService.use("/api/ipsp/historial", historialRoutes);
   await wsService.start();
 
   // Enviar estado completo a cada nuevo cliente al conectarse
