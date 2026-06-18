@@ -19,11 +19,6 @@ export class WebSocketService extends EventEmitter {
     this._setupHandlers();
   }
 
-  /**
-   * Monta un router de Express en una ruta base.
-   * @param {string} path
-   * @param {Router} router
-   */
   use(path, router) {
     this.app.use(path, router);
   }
@@ -38,11 +33,21 @@ export class WebSocketService extends EventEmitter {
         return;
       }
 
-      logger.info(`[WS] Cliente conectado: ${clientIp}`);
+      logger.info(`[WS] Cliente conectado: ${clientIp} — esperando suscripción`);
       this.clients.add(ws);
 
-      // Emitir evento para que index.js envíe el estado completo al nuevo cliente
-      this.emit("client_connected", ws);
+      ws.on("message", (raw) => {
+        try {
+          const msg = JSON.parse(raw);
+          if (msg.accion === "suscribir" && typeof msg.finca === "string") {
+            ws.finca = msg.finca;
+            logger.info(`[WS] Cliente ${clientIp} suscrito a finca "${msg.finca}"`);
+            this.emit("client_subscribed", ws, msg.finca);
+          }
+        } catch {
+          logger.warn(`[WS] Mensaje inválido de ${clientIp}`);
+        }
+      });
 
       ws.on("close", () => {
         this.clients.delete(ws);
@@ -57,19 +62,21 @@ export class WebSocketService extends EventEmitter {
   }
 
   /**
-   * Envía un mensaje a todos los clientes conectados.
+   * Envía un mensaje solo a los clientes suscritos a una finca específica.
+   * @param {string} finca
    * @param {object} data
    */
-  broadcast(data) {
+  broadcastToFinca(finca, data) {
     const message = JSON.stringify(data);
     let sent = 0;
     for (const client of this.clients) {
-      if (client.readyState === WebSocket.OPEN) {
+      if (client.readyState === WebSocket.OPEN && client.finca === finca) {
         client.send(message);
         sent++;
       }
     }
-    if (sent > 0) logger.debug(`[WS] Broadcast enviado a ${sent} cliente(s)`);
+    if (sent > 0)
+      logger.debug(`[WS] Broadcast finca "${finca}" → ${sent} cliente(s)`);
   }
 
   /**

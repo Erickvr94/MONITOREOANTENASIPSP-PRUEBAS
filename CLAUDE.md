@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WhatsApp-based monitoring bot for IPSP antennas and gateways (Melacorp S.A, Ecuador). Periodically pings gateway IPs (ICMP) and polls AP/PTP devices via SNMP, tracks status changes, sends WhatsApp alerts on connectivity changes, broadcasts real-time status to WebSocket subscribers, and persists state snapshots to MongoDB. Includes a REST API with JWT auth for user management and historical data queries.
+Monitoring bot for IPSP antennas and gateways (Melacorp S.A, Ecuador). Periodically pings gateway IPs (ICMP) and polls AP/PTP devices via SNMP, tracks status changes, broadcasts real-time status to WebSocket subscribers, and persists state snapshots to MongoDB. Includes a REST API for historical data queries.
 
 ## Commands
 
@@ -17,82 +17,80 @@ No test framework, linter, or build step is configured. The app runs directly wi
 
 ## Architecture
 
-**ES Modules** (`"type": "module"` in package.json) -- use `import`/`export`, not `require`.
+**ES Modules** (`"type": "module"` in package.json) — use `import`/`export`, not `require`.
 
 ### Startup Flow (`index.js`)
 
-1. Connects to MongoDB via Mongoose (`config/database.js`)
-2. Creates `WebSocketService` (Express + ws on same HTTP server), mounts REST API routes
-3. Starts WhatsApp connection in background (non-blocking -- monitoring begins even if WhatsApp isn't ready)
-4. Runs two parallel monitoring loops immediately, then on intervals:
-   - **Ping loop** (`MONITOR_INTERVAL`): sequential per-gateway, `MAX_ERROR_COUNT` verification rounds of 5 ICMP pings each, majority vote determines state. Extra verification round if result is offline. WhatsApp alerts on state changes. Broadcasts `gateway_update` per gateway + `estado_completo` at end of cycle. Saves snapshot to MongoDB.
+1. Reads `config/fincas.js` to get the list of active fincas
+2. For each finca: dynamically imports its `config/fincas/<id>/direcciones.js` and `ap_ptp.js`, then creates a dedicated MongoDB connection (`MONGO_HOST/<finca.db>`) and a Mongoose model on that connection
+3. Creates `WebSocketService` (Express + ws sharing one HTTP server), mounts historial routes at `/api/ipsp/:finca/historial`
+4. Starts **two parallel monitoring loops per finca** immediately, then on intervals:
+   - **Ping loop** (`MONITOR_INTERVAL`): sequential per-gateway, `MAX_ERROR_COUNT` verification rounds of 5 ICMP pings each, majority vote determines state. Extra verification round if result is offline. Broadcasts `gateway_update` per gateway + `estado_completo` at end of cycle. Saves snapshot to finca's MongoDB.
    - **SNMP loop** (`SNMP_INTERVAL`): parallel polling of all AP/PTP devices via `net-snmp` subtree query. Broadcasts `estado_completo` + saves snapshot at end of cycle.
-5. New WebSocket clients immediately receive full state on connect.
+5. WebSocket clients subscribe to a finca by sending `{ accion: "suscribir", finca: "<id>" }` after connecting; server then sends `estado_completo` for that finca and routes all future events to that client only.
 
 ### Key Files
 
-- **`index.js`** -- Entry point. Monitoring loops, ping logic, SNMP orchestration, WhatsApp alert formatting, in-memory state tracking (`estadoGateways`, `estadoDispositivos`, `detalleGateways`, `detalleDispositivos`, `erroresConsecutivosDispositivos`, `alertaCaidaEnviada`), WebSocket broadcasting, MongoDB persistence via `broadcastYGuardar()`
-- **`services/WhatsAppService.js`** -- Baileys-based WhatsApp client (EventEmitter). QR auth via terminal, auto-reconnection on non-logout disconnects. Auth state in `auth_info_baileys/`. Emits `ready`, `logout`, `message`
-- **`services/WebSocketService.js`** -- Express app + ws server sharing one `http.Server` (EventEmitter). Exposes `use(path, router)` to mount Express routes, `broadcast(data)`, `sendToClient(ws, data)`. CORS configured for localhost and 192.168.148.x subnet. Emits `client_connected`
-- **`services/SNMPService.js`** -- `consultarSNMP(ip, oid)` uses SNMP v1 subtree query; returns `{ online, value?, count, error? }` where `count` is the number of varbinds received and `value` is the first numeric result
-- **`config/database.js`** -- Mongoose connection to MongoDB (`MONGODB_URI` env var)
-- **`models/EstadoHistorico.js`** -- Mongoose model `IPSPEstadosHistorico`: `{ timestamp, gateways (Mixed), dispositivos (Mixed) }`. Stores full state snapshots each monitoring cycle
-- **`models/User.js`** -- Mongoose model: `{ username, email, name, password (bcrypt), role (master|admin|user) }`
-- **`middleware/authMiddleware.js`** -- `requireAuth` (JWT Bearer verification), `requireRole(...roles)` (role-based access)
-- **`routes/auth.js`** -- `POST /api/auth/login` (username or email + password → JWT), `GET /api/auth/me` (current user profile)
-- **`routes/users.js`** -- `POST /api/users` (create user, master role only)
-- **`routes/historial.js`** -- `GET /api/historial/ultima-hora` (last hour snapshots), `GET /api/historial/fecha/:fecha` (YYYY-MM-DD, Ecuador UTC-5), `GET /api/historial/caidas/:fecha` (downtime counts/percentages per gateway + device for a date), `GET /api/historial/caidas/:fechaInicio/:fechaFin` (downtime breakdown per day across a range)
-- **`helpers/direcciones.js`** -- Gateway config for ping monitoring: `{ id: { IP, Sectores[] } }`
-- **`helpers/ap_ptp.js`** -- AP/PTP device config for SNMP monitoring: `{ grupo: { nombre: { IP, Ubicacion, OID } } }`. Ubiquiti devices using OID `1.3.6.1.4.1.41112.1.4.7.1.3.1`
-- **`utils/logger.js`** -- Pino logger with pretty-print; level from `LOG_LEVEL` env var
+- **`index.js`** — Entry point. Per-finca monitoring loops, ping logic (`ejecutarPing`, `verificarEstadoIP`), SNMP orchestration. In-memory state lives in `monitores[fincaId].estado` (`gateways`, `detalleGateways`, `dispositivos`, `detalleDispositivos`, `erroresConsecutivos`). WebSocket broadcasting via `broadcastToFinca`. MongoDB persistence via `broadcastYGuardar(fincaId)`.
+- **`services/WebSocketService.js`** — Express app + ws server sharing one `http.Server` (EventEmitter). Listens only on `127.0.0.1`. All `/api` routes require `x-internal-token` header. WebSocket connections also require `x-internal-token`. Exposes `use(path, router)`, `broadcastToFinca(finca, data)`, `sendToClient(ws, data)`. Emits `client_subscribed` when a client sends `{ accion: "suscribir", finca }`.
+- **`services/SNMPService.js`** — `consultarSNMP(ip, oid)` uses SNMP v1 subtree query; returns `{ online, value?, count, error? }` where `count` is the number of varbinds received and `value` is the first numeric result
+- **`config/fincas.js`** — Central registry of active fincas: `{ [fincaId]: { nombre } }`. Add/remove fincas here; the service loads all listed fincas at startup.
+- **`config/database.js`** — `connectDatabase()`: creates and returns a single shared Mongoose connection to `MONGODB_URI`
+- **`models/EstadoHistorico.js`** — `crearModeloEstadoHistorico(connection, fincaId)`: returns a Mongoose model bound to collection `<fincaId>_estados_historicos`. Schema: `{ timestamp, gateways (Mixed), dispositivos (Mixed) }` with 90-day TTL. All fincas share the same `monitoreo` database, separated by collection.
+- **`middleware/authMiddleware.js`** — `requireInternalToken`: checks `x-internal-token` header against `INTERNAL_TOKEN` env var
+- **`routes/historial.js`** — Historical data endpoints with `{ mergeParams: true }`. Gets the correct Mongoose model from `req.app.locals.modelosPorFinca[finca]`.
+- **`config/fincas/<finca_id>/direcciones.js`** — Gateway config for ping monitoring: `{ id: { IP, Sectores[] } }`
+- **`config/fincas/<finca_id>/ap_ptp.js`** — AP/PTP device config for SNMP monitoring: `{ grupo: { nombre: { IP, Ubicacion, OID } } }`. Ubiquiti devices use OID `1.3.6.1.4.1.41112.1.4.7.1.3.1`
+- **`utils/logger.js`** — Pino logger with pretty-print; level from `LOG_LEVEL` env var
+
+### Authentication
+
+All REST API calls and WebSocket connections require the `x-internal-token` header matching the `INTERNAL_TOKEN` env var. There is no JWT or user management system.
 
 ### WebSocket Message Types
 
-- `estado_completo` -- Full snapshot of all gateways + dispositivos (sent on connect and after each full cycle)
-- `gateway_update` -- Single gateway result after each ping check
+- `estado_completo` — Full snapshot of all gateways + dispositivos for the subscribed finca. Sent after subscription and after each full cycle. Includes `finca` field.
+- `gateway_update` — Single gateway result after each ping check. Includes `finca` field. Only sent to clients subscribed to that finca.
+- `error` — Sent if the client subscribes to a finca that doesn't exist.
 
 ### REST API Endpoints
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/api/auth/login` | None | Login with username/email + password, returns JWT |
-| GET | `/api/auth/me` | Bearer JWT | Get current user profile |
-| POST | `/api/users` | Bearer JWT (master) | Create new user |
-| GET | `/api/historial/ultima-hora` | None | State snapshots from last hour |
-| GET | `/api/historial/fecha/:fecha` | None | State snapshots for a date (YYYY-MM-DD, Ecuador TZ) |
-| GET | `/api/historial/caidas/:fecha` | None | Downtime counts and % per gateway/device for a date |
-| GET | `/api/historial/caidas/:fechaInicio/:fechaFin` | None | Downtime breakdown per day across a date range |
+All endpoints require `x-internal-token` header.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/ipsp/:finca/historial/ultima-hora` | State snapshots from last hour |
+| GET | `/api/ipsp/:finca/historial/fecha/:fecha` | State snapshots for a date (YYYY-MM-DD, Ecuador TZ) |
+| GET | `/api/ipsp/:finca/historial/caidas/:fecha` | Downtime counts and % per gateway/device for a date |
+| GET | `/api/ipsp/:finca/historial/caidas/:fechaInicio/:fechaFin` | Downtime breakdown per day across a date range |
 
 ## Environment Variables (.env)
 
 | Variable | Default | Description |
 |---|---|---|
-| `WHATSAPP_NUMBERS` | (none) | Comma-separated recipient numbers (no `+` prefix, e.g. `593984778678`) |
+| `INTERNAL_TOKEN` | (none) | Shared secret for WebSocket and REST API access |
+| `MONGODB_URI` | `mongodb://localhost:27017/monitoreo` | MongoDB connection string. Una sola BD `monitoreo`; cada finca usa su propia colección `<fincaId>_estados_historicos` |
 | `MONITOR_INTERVAL` | `60000` | Ping cycle interval in ms |
 | `MAX_ERROR_COUNT` | `5` | Number of verification rounds per gateway per cycle |
 | `SNMP_INTERVAL` | `30000` | SNMP poll interval in ms |
 | `SNMP_COMMUNITY` | `public` | SNMP community string |
 | `SNMP_TIMEOUT` | `5000` | SNMP request timeout in ms |
 | `SNMP_RETRIES` | `4` | SNMP retries on timeout |
-| `WS_PORT` | `3000` | WebSocket/HTTP server port |
+| `WS_PORT` | `3000` | WebSocket/HTTP server port (binds to 127.0.0.1 only) |
 | `LOG_LEVEL` | `info` | Pino log level |
-| `MONGODB_URI` | `mongodb://localhost:27017/monitoreo` | MongoDB connection string |
-| `JWT_SECRET` | `changeme` | Secret for signing JWT tokens |
-| `JWT_EXPIRES_IN` | `8h` | JWT token expiration |
 
 ## Important Notes
 
-- Phone numbers use international format WITHOUT `+` sign. 9-digit numbers auto-prefixed with `593` (Ecuador)
-- If WhatsApp session is logged out, delete `auth_info_baileys/` directory and re-scan QR
-- Ping uses `-n 1` flag (Windows-style) -- this runs on Windows
-- WhatsApp broadcast adds 1-second delay between recipients to avoid rate limits
-- WhatsApp connection is non-blocking: monitoring and WebSocket start even if WhatsApp is still connecting
+- Ping uses the `ping` npm package (`ping.promise.probe`) with `-n 1` flag (Windows-style) — this runs on Windows
+- `verificarEstadoIP` runs `MAX_ERROR_COUNT` rounds of 5 pings each; majority vote determines state. An extra verification round runs if the result is offline (to catch recovery)
+- Ping success threshold: fewer than 3 lost packets out of 5 = online; majority of rounds must pass
+- `erroresConsecutivosDispositivos[key]` increments on each consecutive SNMP failure and resets to 0 on recovery
+- `detalleGateways[id]` stores `{ ultimoPing, ultimaActualizacion }` for the WebSocket `gateway_update` payload
+- `detalleDispositivos[key]` stores `{ uptime: null, error, ultimaActualizacion }` (`uptime` is always `null`)
+- **SNMP broadcast order**: `broadcastYGuardar()` is called before anything else at the end of each SNMP cycle
+- The historial date endpoints interpret dates as Ecuador local time (UTC-5, `America/Guayaquil`)
 - MongoDB must be running before starting the app (connection failure is fatal)
 - SNMP queries use v1 protocol (not v2c) with subtree method
-- All dates displayed in WhatsApp messages use Ecuador timezone (`America/Guayaquil`)
-- The historial date endpoint interprets dates as Ecuador local time (UTC-5)
-- **SNMP alert suppression**: when a device goes offline, its WhatsApp alert is suppressed if the gateway covering that sector (`encontrarGatewayPorSector`) is also offline or has no known state. Recovery alerts are only sent if a prior downtime alert was sent (`alertaCaidaEnviada[key]`)
-- **SNMP broadcast order**: `broadcastYGuardar()` is called before processing WhatsApp notifications so WebSocket clients and MongoDB are never delayed by WhatsApp send latency
-- `erroresConsecutivosDispositivos[key]` increments on each consecutive SNMP failure and resets to 0 on recovery; included in downtime alerts
-- `detalleGateways[id]` stores `{ ultimoPing, ultimaActualizacion }` for the WebSocket `gateway_update` payload
-- `detalleDispositivos[key]` stores `{ uptime: null, error, ultimaActualizacion }` (`uptime` is always `null` since the SNMP result has no uptime field)
+- **Multi-finca**: one service monitors all fincas simultaneously. To add a finca: (1) add an entry to `config/fincas.js`, (2) create `config/fincas/<id>/direcciones.js` and `ap_ptp.js`, (3) restart the service.
+- To add a gateway to an existing finca: edit `config/fincas/<finca_id>/direcciones.js`. To add AP/PTP devices: edit `config/fincas/<finca_id>/ap_ptp.js`.
+- WebSocket clients must send `{ accion: "suscribir", finca: "<id>" }` after connecting to start receiving events.

@@ -3,36 +3,20 @@ import { WebSocketService } from "./services/WebSocketService.js";
 import { consultarSNMP } from "./services/SNMPService.js";
 import { connectDatabase } from "./config/database.js";
 import historialRoutes from "./routes/historial.js";
-import { EstadoHistorico } from "./models/EstadoHistorico.js";
-import { direcciones } from "./helpers/direcciones.js";
-import { direccionesIP } from "./helpers/ap_ptp.js";
+import { crearModeloEstadoHistorico } from "./models/EstadoHistorico.js";
+import { fincasConfig } from "./config/fincas.js";
 import logger from "./utils/logger.js";
 import "dotenv/config";
 
-// Configuración desde .env
 const MONITOR_INTERVAL = parseInt(process.env.MONITOR_INTERVAL) || 60000;
 const MAX_ERROR_COUNT = parseInt(process.env.MAX_ERROR_COUNT) || 5;
 const SNMP_INTERVAL = parseInt(process.env.SNMP_INTERVAL) || 30000;
 
-// Estado de cada gateway (para detectar cambios y broadcasting)
-const estadoGateways = {};
-const detalleGateways = {};
+// Estado y config por finca: { [fincaId]: { config, estado, modelo } }
+const monitores = {};
 
-// Estado de dispositivos SNMP (AP/PTP)
-const estadoDispositivos = {};
-const detalleDispositivos = {};
-// Errores consecutivos por dispositivo SNMP (se resetea al volver a estar online)
-const erroresConsecutivosDispositivos = {};
-
-// Servicio WebSocket
 let wsService = null;
 
-/**
- * Ejecuta ping a una IP usando el paquete 'ping' (más robusto que child_process)
- * @param {string} host - Dirección IP
- * @param {number} count - Número de paquetes a enviar
- * @returns {Object} - Resultado del ping
- */
 async function ejecutarPing(host, count = 5) {
   try {
     logger.debug(`Ejecutando ping a ${host} (${count} paquetes)`);
@@ -41,11 +25,10 @@ async function ejecutarPing(host, count = 5) {
     let tiempoTotal = 0;
     const resultados = [];
 
-    // Ejecutar múltiples pings para obtener estadísticas
     for (let i = 0; i < count; i++) {
       const res = await ping.promise.probe(host, {
-        timeout: 3, // 3 segundos de timeout por ping
-        extra: ["-n", "1"], // Solo 1 paquete por intento
+        timeout: 3,
+        extra: ["-n", "1"],
       });
 
       resultados.push(res);
@@ -61,7 +44,6 @@ async function ejecutarPing(host, count = 5) {
         `  Intento ${i + 1}/${count}: ${res.alive ? "✓" : "✗"} (${res.time}ms)`,
       );
 
-      // Pequeña pausa entre pings (excepto el último)
       if (i < count - 1) {
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
@@ -85,7 +67,6 @@ async function ejecutarPing(host, count = 5) {
       tiempoPromedio,
     };
   } catch (error) {
-    // Capturar error detallado para diagnóstico
     logger.error(`❌ ERROR EJECUTANDO PING a ${host}:`);
     logger.error(`   Mensaje: ${error.message}`);
     logger.error(`   Stack: ${error.stack}`);
@@ -102,11 +83,6 @@ async function ejecutarPing(host, count = 5) {
   }
 }
 
-/**
- * Verifica el estado de una IP realizando 5 verificaciones
- * @param {string} host - Dirección IP
- * @returns {Object} - { hayComunicacion: boolean, ultimoPing: Object }
- */
 async function verificarEstadoIP(host) {
   logger.info(`\n${"=".repeat(60)}`);
   logger.info(`Verificando estado de ${host}`);
@@ -119,11 +95,9 @@ async function verificarEstadoIP(host) {
   for (let i = 0; i < totalVerificaciones; i++) {
     logger.info(`\nVerificación ${i + 1}/${totalVerificaciones}:`);
 
-    // Ejecutar un solo ping con 5 paquetes
     const resultado = await ejecutarPing(host, 5);
-    ultimoPing = resultado; // Guardar el último resultado
+    ultimoPing = resultado;
 
-    // Hay comunicación si se pierden menos de 3 paquetes (de 5)
     let hayComunicacion = resultado.perdidos < 3;
 
     if (hayComunicacion) {
@@ -137,13 +111,11 @@ async function verificarEstadoIP(host) {
       );
     }
 
-    // Pausa entre verificaciones (excepto la última)
     if (i < totalVerificaciones - 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
 
-  // Hay comunicación si la mayoría de verificaciones fueron exitosas (3 o más de 5)
   let hayComunicacion =
     verificacionesExitosas >= Math.ceil(totalVerificaciones / 2);
 
@@ -155,8 +127,6 @@ async function verificarEstadoIP(host) {
     `Estado preliminar: ${hayComunicacion ? "✓ CON COMUNICACIÓN" : "✗ SIN COMUNICACIÓN"}`,
   );
 
-  // Si el resultado fue SIN COMUNICACIÓN, hacer una verificación extra
-  // para detectar si la comunicación acaba de regresar
   if (!hayComunicacion) {
     logger.info(`\n${"=".repeat(60)}`);
     logger.info("🔍 Realizando verificación extra para confirmar estado...");
@@ -165,7 +135,7 @@ async function verificarEstadoIP(host) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const verificacionExtra = await ejecutarPing(host, 5);
-    ultimoPing = verificacionExtra; // Actualizar con la verificación extra
+    ultimoPing = verificacionExtra;
 
     const comunicacionExtra = verificacionExtra.perdidos < 3;
 
@@ -174,7 +144,7 @@ async function verificarEstadoIP(host) {
         `✓ Verificación extra exitosa (${verificacionExtra.recibidos}/${verificacionExtra.enviados} paquetes recibidos)`,
       );
       logger.info("🟢 La comunicación acaba de regresar");
-      hayComunicacion = true; // Cambiar estado a CON COMUNICACIÓN
+      hayComunicacion = true;
     } else {
       logger.warn(
         `✗ Verificación extra fallida (${verificacionExtra.recibidos}/${verificacionExtra.enviados} paquetes recibidos)`,
@@ -189,79 +159,72 @@ async function verificarEstadoIP(host) {
   );
   logger.info("=".repeat(60));
 
-  return {
-    hayComunicacion,
-    ultimoPing,
-  };
+  return { hayComunicacion, ultimoPing };
 }
 
-async function monitorearTodas() {
-  logger.info("\n🔍 Iniciando ciclo de monitoreo...\n");
+async function monitorearTodas(fincaId) {
+  const { config: { direcciones }, estado } = monitores[fincaId];
+
+  logger.info(`\n[${fincaId}] 🔍 Iniciando ciclo de monitoreo...\n`);
 
   for (const [id, gateway] of Object.entries(direcciones)) {
     const { IP, Sectores } = gateway;
 
-    logger.info(`\n📡 Monitoreando Gateway ${id}: ${IP}`);
+    logger.info(`\n[${fincaId}] 📡 Monitoreando Gateway ${id}: ${IP}`);
     logger.info(`   Sectores: ${Sectores.join(", ")}`);
 
-    // Verificar estado actual
     const resultado = await verificarEstadoIP(IP);
     const estadoActual = resultado.hayComunicacion;
     const ultimoPing = resultado.ultimoPing;
 
-    // Obtener estado anterior (undefined si es la primera vez)
-    const estadoAnterior = estadoGateways[id];
+    const estadoAnterior = estado.gateways[id];
 
-    // Guardar estado actual y detalle para WebSocket
-    estadoGateways[id] = estadoActual;
-    detalleGateways[id] = {
+    estado.gateways[id] = estadoActual;
+    estado.detalleGateways[id] = {
       ultimoPing,
       ultimaActualizacion: new Date().toISOString(),
     };
 
-    // Notificar a clientes WebSocket con el estado actualizado de este gateway
-    wsService?.broadcast({
+    wsService?.broadcastToFinca(fincaId, {
       tipo: "gateway_update",
+      finca: fincaId,
       id,
       ip: IP,
       sectores: Sectores,
       online: estadoActual,
       ultimoPing,
-      ultimaActualizacion: detalleGateways[id].ultimaActualizacion,
+      ultimaActualizacion: estado.detalleGateways[id].ultimaActualizacion,
     });
 
     if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
       logger.info(
-        `Cambio de estado: ${estadoAnterior ? "CON" : "SIN"} → ${estadoActual ? "CON" : "SIN"} comunicación`,
+        `[${fincaId}] Cambio: ${estadoAnterior ? "CON" : "SIN"} → ${estadoActual ? "CON" : "SIN"} comunicación`,
       );
     } else if (estadoAnterior === undefined) {
       logger.info(
-        `Estado inicial registrado: ${estadoActual ? "CON" : "SIN"} comunicación`,
+        `[${fincaId}] Estado inicial: ${estadoActual ? "CON" : "SIN"} comunicación`,
       );
     } else {
       logger.info(
-        `Sin cambios en el estado (${estadoActual ? "CON" : "SIN"} comunicación)`,
+        `[${fincaId}] Sin cambios (${estadoActual ? "CON" : "SIN"} comunicación)`,
       );
     }
   }
 
-  logger.info("\n✅ Ciclo de monitoreo completado\n");
+  logger.info(`\n[${fincaId}] ✅ Ciclo de monitoreo completado\n`);
 
-  // Broadcast del estado completo al terminar el ciclo de gateways y guardar historial
-  await broadcastYGuardar();
+  await broadcastYGuardar(fincaId);
 }
 
-/**
- * Construye el estado completo de todos los dispositivos para broadcasting WebSocket.
- * @returns {object}
- */
-function construirEstadoCompleto() {
+function construirEstadoCompleto(fincaId) {
+  const { config: { direcciones, direccionesIP }, estado } = monitores[fincaId];
+
   const gateways = Object.entries(direcciones).reduce((acc, [id, gw]) => {
     acc[id] = {
       ip: gw.IP,
       sectores: gw.Sectores,
-      online: estadoGateways[id] ?? null,
-      ...(detalleGateways[id] || {}),
+      online: estado.gateways[id] ?? null,
+      ...(estado.detalleGateways[id] || {}),
     };
     return acc;
   }, {});
@@ -273,8 +236,8 @@ function construirEstadoCompleto() {
         dacc[nombre] = {
           ip: info.IP,
           ubicacion: info.Ubicacion,
-          online: estadoDispositivos[key] ?? null,
-          ...(detalleDispositivos[key] || {}),
+          online: estado.dispositivos[key] ?? null,
+          ...(estado.detalleDispositivos[key] || {}),
         };
         return dacc;
       }, {});
@@ -285,33 +248,32 @@ function construirEstadoCompleto() {
 
   return {
     tipo: "estado_completo",
+    finca: fincaId,
     timestamp: new Date().toISOString(),
     gateways,
     dispositivos,
   };
 }
 
-/**
- * Construye el estado completo, lo guarda en MongoDB y lo emite por WebSocket.
- */
-async function broadcastYGuardar() {
-  const estado = construirEstadoCompleto();
-  wsService?.broadcast(estado);
+async function broadcastYGuardar(fincaId) {
+  const estado = construirEstadoCompleto(fincaId);
+  wsService?.broadcastToFinca(fincaId, estado);
 
   try {
-    await EstadoHistorico.create({
+    await monitores[fincaId].modelo.create({
       timestamp: new Date(estado.timestamp),
       gateways: estado.gateways,
       dispositivos: estado.dispositivos,
     });
   } catch (error) {
-    logger.error(`Error al guardar historial: ${error.message}`);
+    logger.error(`[${fincaId}] Error al guardar historial: ${error.message}`);
   }
 }
 
+async function monitorearDispositivos(fincaId) {
+  const { config: { direccionesIP }, estado } = monitores[fincaId];
 
-async function monitorearDispositivos() {
-  logger.info("\n📶 Iniciando monitoreo SNMP de dispositivos AP/PTP...");
+  logger.info(`\n[${fincaId}] 📶 Iniciando monitoreo SNMP de dispositivos AP/PTP...`);
 
   const tareas = [];
 
@@ -321,30 +283,30 @@ async function monitorearDispositivos() {
 
       tareas.push(
         consultarSNMP(info.IP, info.OID).then((resultado) => {
-          const estadoAnterior = estadoDispositivos[key];
+          const estadoAnterior = estado.dispositivos[key];
           const estadoActual = resultado.online;
 
-          estadoDispositivos[key] = estadoActual;
-          detalleDispositivos[key] = {
+          estado.dispositivos[key] = estadoActual;
+          estado.detalleDispositivos[key] = {
             uptime: resultado.uptime ?? null,
             error: resultado.error ?? null,
             ultimaActualizacion: new Date().toISOString(),
           };
 
           if (!estadoActual) {
-            erroresConsecutivosDispositivos[key] =
-              (erroresConsecutivosDispositivos[key] || 0) + 1;
+            estado.erroresConsecutivos[key] =
+              (estado.erroresConsecutivos[key] || 0) + 1;
           } else {
-            erroresConsecutivosDispositivos[key] = 0;
+            estado.erroresConsecutivos[key] = 0;
           }
 
           if (estadoAnterior !== undefined && estadoAnterior !== estadoActual) {
             logger.info(
-              `[SNMP] ${grupo} > ${nombre} (${info.IP}): ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
+              `[${fincaId}][SNMP] ${grupo} > ${nombre} (${info.IP}): ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
             );
           } else if (estadoAnterior === undefined) {
             logger.info(
-              `[SNMP] ${grupo} > ${nombre} (${info.IP}): estado inicial ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
+              `[${fincaId}][SNMP] ${grupo} > ${nombre} (${info.IP}): estado inicial ${estadoActual ? "🟢 EN LÍNEA" : "🔴 SIN RESPUESTA"}`,
             );
           }
         }),
@@ -353,14 +315,11 @@ async function monitorearDispositivos() {
   }
 
   await Promise.all(tareas);
-  await broadcastYGuardar();
+  await broadcastYGuardar(fincaId);
 
-  logger.info("✅ Monitoreo SNMP completado\n");
+  logger.info(`[${fincaId}] ✅ Monitoreo SNMP completado\n`);
 }
 
-/**
- * Función principal
- */
 async function main() {
   logger.info("╔═══════════════════════════════════════════════════════════╗");
   logger.info("║   SISTEMA DE MONITOREO DE ANTENAS Y GATEWAYS IPSP        ║");
@@ -368,62 +327,103 @@ async function main() {
     "╚═══════════════════════════════════════════════════════════╝\n",
   );
 
-  // Validar configuración
-  if (Object.keys(direcciones).length === 0) {
-    logger.error("❌ No hay gateways configurados en helpers/direcciones.js");
+  const conn = await connectDatabase();
+
+  for (const [fincaId, meta] of Object.entries(fincasConfig)) {
+    let direcciones = {};
+    let direccionesIP = {};
+    try {
+      const { direccionesIP: dp } = await import(
+        `./config/fincas/${fincaId}/ap_ptp.js`
+      );
+      direccionesIP = dp;
+    } catch {
+      logger.warn(
+        `[${fincaId}] ⚠️  No se encontró config/fincas/${fincaId}/ap_ptp.js — omitiendo`,
+      );
+      continue;
+    }
+    try {
+      const { direcciones: d } = await import(
+        `./config/fincas/${fincaId}/direcciones.js`
+      );
+      direcciones = d;
+    } catch {
+      logger.info(
+        `[${fincaId}] Sin gateways configurados (no existe direcciones.js)`,
+      );
+    }
+
+    const modelo = crearModeloEstadoHistorico(conn, fincaId);
+
+    const totalDispositivos = Object.values(direccionesIP).reduce(
+      (sum, grupo) => sum + Object.keys(grupo).length,
+      0,
+    );
+
+    monitores[fincaId] = {
+      config: { direcciones, direccionesIP },
+      estado: {
+        gateways: {},
+        detalleGateways: {},
+        dispositivos: {},
+        detalleDispositivos: {},
+        erroresConsecutivos: {},
+      },
+      modelo,
+    };
+
+    logger.info(
+      `🏭 [${fincaId}] "${meta.nombre}" — ${Object.keys(direcciones).length} gateways, ${totalDispositivos} dispositivos AP/PTP`,
+    );
+  }
+
+  if (Object.keys(monitores).length === 0) {
+    logger.error(
+      "❌ No se cargó ninguna finca. Verifica config/fincas.js y que exista al menos un ap_ptp.js.",
+    );
     process.exit(1);
   }
 
-  // Contar dispositivos AP/PTP
-  const totalDispositivos = Object.values(direccionesIP).reduce(
-    (sum, grupo) => sum + Object.keys(grupo).length,
-    0,
-  );
-
-  logger.info("⚙️  Configuración:");
-  logger.info(`   - Gateways a monitorear: ${Object.keys(direcciones).length}`);
-  logger.info(`   - Dispositivos AP/PTP (SNMP): ${totalDispositivos}`);
   logger.info(
-    `   - Intervalo de monitoreo (ping): ${MONITOR_INTERVAL / 1000} segundos`,
+    `\n⚙️  Ping: cada ${MONITOR_INTERVAL / 1000}s | SNMP: cada ${SNMP_INTERVAL / 1000}s | Verificaciones/ciclo: ${MAX_ERROR_COUNT}\n`,
   );
-  logger.info(
-    `   - Intervalo de monitoreo (SNMP): ${SNMP_INTERVAL / 1000} segundos`,
-  );
-  logger.info(`   - Verificaciones por ciclo: ${MAX_ERROR_COUNT}\n`);
 
-  // Conectar base de datos
-  await connectDatabase();
-
-  // Inicializar WebSocket + HTTP server
   wsService = new WebSocketService();
-  wsService.use("/api/ipsp/historial", historialRoutes);
+  wsService.app.locals.modelosPorFinca = Object.fromEntries(
+    Object.entries(monitores).map(([id, m]) => [id, m.modelo]),
+  );
+  wsService.use("/api/ipsp/:finca/historial", historialRoutes);
   await wsService.start();
 
-  // Enviar estado completo a cada nuevo cliente al conectarse
-  wsService.on("client_connected", (ws) => {
-    wsService.sendToClient(ws, construirEstadoCompleto());
+  wsService.on("client_subscribed", (ws, finca) => {
+    if (monitores[finca]) {
+      wsService.sendToClient(ws, construirEstadoCompleto(finca));
+    } else {
+      wsService.sendToClient(ws, {
+        tipo: "error",
+        mensaje: `Finca "${finca}" no encontrada`,
+      });
+    }
   });
 
-  // Ejecutar primer monitoreo inmediatamente
-  await Promise.all([monitorearTodas(), monitorearDispositivos()]);
-
-  setInterval(async () => {
-    await monitorearTodas();
-  }, MONITOR_INTERVAL);
-
-  setInterval(async () => {
-    await monitorearDispositivos();
-  }, SNMP_INTERVAL);
-
-  logger.info(
-    `\n⏰ Monitoreo ping configurado cada ${MONITOR_INTERVAL / 1000} segundos`,
+  // Arrancar monitoreo de todas las fincas en paralelo
+  await Promise.all(
+    Object.keys(monitores).map((fincaId) =>
+      Promise.all([monitorearTodas(fincaId), monitorearDispositivos(fincaId)]),
+    ),
   );
+
+  for (const fincaId of Object.keys(monitores)) {
+    setInterval(() => monitorearTodas(fincaId), MONITOR_INTERVAL);
+    setInterval(() => monitorearDispositivos(fincaId), SNMP_INTERVAL);
+  }
+
   logger.info(
-    `⏰ Monitoreo SNMP configurado cada ${SNMP_INTERVAL / 1000} segundos`,
+    `\n⏰ Monitoreo activo para ${Object.keys(monitores).length} finca(s): ${Object.keys(monitores).join(", ")}`,
   );
 }
 
-// Manejar errores no capturados
 process.on("unhandledRejection", (error) => {
   logger.error("Error no manejado:", error);
 });
@@ -433,7 +433,6 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-// Iniciar aplicación
 main().catch((error) => {
   logger.error("Error fatal:", error);
   process.exit(1);
