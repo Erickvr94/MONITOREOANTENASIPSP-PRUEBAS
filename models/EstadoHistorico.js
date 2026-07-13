@@ -13,3 +13,4 @@ export function crearModeloEstadoHistorico(connection, fincaId) {
   const coleccion = `ipsp_${fincaId}_estados_historicos`;
   return connection.model(`EstadoHistorico_${fincaId}`, schema, coleccion);
 }
+

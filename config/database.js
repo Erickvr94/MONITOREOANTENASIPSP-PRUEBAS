@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+/*import mongoose from "mongoose";
 import logger from "../utils/logger.js";
 
 const MONGODB_URI =
@@ -8,4 +8,12 @@ export async function connectDatabase() {
   const conn = await mongoose.createConnection(MONGODB_URI).asPromise();
   logger.info(`[DB] Conectado: ${MONGODB_URI}`);
   return conn;
+}
+*/
+
+import logger from "../utils/logger.js";
+
+export async function connectDatabase() {
+  logger.warn("[DB] MongoDB deshabilitado (modo pruebas)");
+  return null;
 }

@@ -259,7 +259,7 @@ async function broadcastYGuardar(fincaId) {
   const estado = construirEstadoCompleto(fincaId);
   wsService?.broadcastToFinca(fincaId, estado);
 
-  try {
+  /*try {
     await monitores[fincaId].modelo.create({
       timestamp: new Date(estado.timestamp),
       gateways: estado.gateways,
@@ -267,6 +267,17 @@ async function broadcastYGuardar(fincaId) {
     });
   } catch (error) {
     logger.error(`[${fincaId}] Error al guardar historial: ${error.message}`);
+  }*/
+  if(monitores[fincaId].modelo) {
+    try {
+      await monitores[fincaId].modelo.create({
+        timestamp: new Date(estado.timestamp),
+        gateways: estado.gateways,
+        dispositivos: estado.dispositivos,
+      });
+    } catch (error) {
+      logger.error(`[${fincaId}] Error al guardar historial: ${error.message}`);
+    }
   }
 }
 
@@ -354,7 +365,8 @@ async function main() {
       );
     }
 
-    const modelo = crearModeloEstadoHistorico(conn, fincaId);
+    //const modelo = crearModeloEstadoHistorico(conn, fincaId);
+const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
 
     const totalDispositivos = Object.values(direccionesIP).reduce(
       (sum, grupo) => sum + Object.keys(grupo).length,
