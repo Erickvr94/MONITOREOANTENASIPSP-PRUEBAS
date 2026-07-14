@@ -1,8 +1,10 @@
 import ping from "ping";
 import { WebSocketService } from "./services/WebSocketService.js";
-import { consultarSNMP } from "./services/SNMPService.js";
+import { consultarDispositivo } from "./services/SNMPService.js";
 import { connectDatabase } from "./config/database.js";
 import historialRoutes from "./routes/historial.js";
+import mapaRoutes from "./routes/mapa.js";
+import { cargarCoordenadas } from "./services/MapsService.js";
 import { crearModeloEstadoHistorico } from "./models/EstadoHistorico.js";
 import { fincasConfig } from "./config/fincas.js";
 import logger from "./utils/logger.js";
@@ -293,15 +295,15 @@ async function monitorearDispositivos(fincaId) {
       const key = `${grupo}.${nombre}`;
 
       tareas.push(
-        consultarSNMP(info.IP, info.OID).then((resultado) => {
+        consultarDispositivo(info.IP, info.OID).then((resultado) => {
           const estadoAnterior = estado.dispositivos[key];
           const estadoActual = resultado.online;
 
           estado.dispositivos[key] = estadoActual;
           estado.detalleDispositivos[key] = {
-            uptime: resultado.uptime ?? null,
+            potencia: resultado.potencia ?? null,
             error: resultado.error ?? null,
-            ultimaActualizacion: new Date().toISOString(),
+            ultimaActualizacion: resultado.fecha ?? new Date().toISOString(),
           };
 
           if (!estadoActual) {
@@ -373,6 +375,8 @@ const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
       0,
     );
 
+    await cargarCoordenadas(fincaId);
+
     monitores[fincaId] = {
       config: { direcciones, direccionesIP },
       estado: {
@@ -392,20 +396,22 @@ const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
 
   if (Object.keys(monitores).length === 0) {
     logger.error(
-      "❌ No se cargó ninguna finca. Verifica config/fincas.js y que exista al menos un ap_ptp.js.",
+      "No se cargó ninguna finca. Verifica config/fincas.js y que exista al menos un ap_ptp.js.",
     );
     process.exit(1);
   }
 
   logger.info(
-    `\n⚙️  Ping: cada ${MONITOR_INTERVAL / 1000}s | SNMP: cada ${SNMP_INTERVAL / 1000}s | Verificaciones/ciclo: ${MAX_ERROR_COUNT}\n`,
+    `\n Ping: cada ${MONITOR_INTERVAL / 1000}s | SNMP: cada ${SNMP_INTERVAL / 1000}s | Verificaciones/ciclo: ${MAX_ERROR_COUNT}\n`,
   );
 
   wsService = new WebSocketService();
   wsService.app.locals.modelosPorFinca = Object.fromEntries(
     Object.entries(monitores).map(([id, m]) => [id, m.modelo]),
   );
+  wsService.app.locals.monitores = monitores;
   wsService.use("/api/ipsp/:finca/historial", historialRoutes);
+  wsService.use("/api/ipsp/:finca/mapa", mapaRoutes);
   await wsService.start();
 
   wsService.on("client_subscribed", (ws, finca) => {
@@ -432,7 +438,7 @@ const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
   }
 
   logger.info(
-    `\n⏰ Monitoreo activo para ${Object.keys(monitores).length} finca(s): ${Object.keys(monitores).join(", ")}`,
+    `\nMonitoreo activo para ${Object.keys(monitores).length} finca(s): ${Object.keys(monitores).join(", ")}`,
   );
 }
 
@@ -441,7 +447,7 @@ process.on("unhandledRejection", (error) => {
 });
 
 process.on("SIGINT", () => {
-  logger.info("\n\n👋 Deteniendo sistema de monitoreo...");
+  logger.info("\n\nDeteniendo sistema de monitoreo...");
   process.exit(0);
 });
 

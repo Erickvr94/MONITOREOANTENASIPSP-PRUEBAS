@@ -20,17 +20,12 @@ export const direccionesIP = {
       Ubicacion: "Torre Piscinas 58",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
     },
-    "AP-Campemento": {
-      IP: "192.168.102.156",
-      Ubicacion: "Torre Campamento",
-      OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
-    },
     ANTPiscina58: {
       IP: "192.168.102.157",
       Ubicacion: "Torre Piscinas 58",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
     },
-    "AP-5": {
+    "AP5": {
       IP: "192.168.102.158",
       Ubicacion: "Torre Piscinas 58",
       OID: "1.3.6.1.4.1.41112.1.4.7.1.3.1",
