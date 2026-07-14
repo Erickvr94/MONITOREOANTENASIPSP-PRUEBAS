@@ -5,10 +5,12 @@ const SNMP_COMMUNITY = process.env.SNMP_COMMUNITY || "public";
 const SNMP_TIMEOUT = parseInt(process.env.SNMP_TIMEOUT) || 5000;
 const SNMP_RETRIES = parseInt(process.env.SNMP_RETRIES) || 4;
 
-// OID_UPTIME = "1.3.6.1.2.1.1.3.0" Se usa ÚNICAMENTE para validar encendido/apagado del equipo.
+// sysUpTime (MIB-2 estándar): mismo OID en todos los equipos SNMP.
+// Se usa ÚNICAMENTE para validar encendido/apagado del equipo.
 const OID_UPTIME = "1.3.6.1.2.1.1.3.0";
 
 /**
+ * (SIN CAMBIOS — lógica original intacta)
  * Consulta vía SNMP v1 subtree para verificar si un dispositivo está en línea.
  * @param {string} ip
  * @param {string} oid - OID a consultar (específico por dispositivo)
@@ -69,7 +71,7 @@ export async function consultarSNMP(ip, oid) {
 
 /**
  * Valida encendido/apagado del equipo consultando sysUpTime.
- * Si responde: encendido. Si no responde: apagado o sin red.
+ * Si responde → encendido. Si no responde → apagado o sin red.
  * @param {string} ip
  * @returns {Promise<{online: boolean, error: string|null}>}
  */
@@ -111,9 +113,10 @@ function validarEncendido(ip) {
 
 /**
  * Consulta completa de un dispositivo: estado + potencia EN PARALELO.
+ *
  *   - online   = el equipo respondió sysUpTime (encendido)
  *   - potencia = dBm del OID configurado en ap_ptp.js, o null si ese OID
- *    desapareció (ej: enlace PTP con el extremo remoto apagado)
+ *                desapareció (ej: enlace PTP con el extremo remoto apagado)
  *
  * @param {string} ip
  * @param {string} oidPotencia - campo OID de ap_ptp.js

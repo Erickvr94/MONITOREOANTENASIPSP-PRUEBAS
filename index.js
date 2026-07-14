@@ -1,3 +1,4 @@
+import "dotenv/config"; // ⚠️ SIEMPRE primero: los demás módulos leen process.env al cargarse
 import ping from "ping";
 import { WebSocketService } from "./services/WebSocketService.js";
 import { consultarDispositivo } from "./services/SNMPService.js";
@@ -8,7 +9,6 @@ import { cargarCoordenadas } from "./services/MapsService.js";
 import { crearModeloEstadoHistorico } from "./models/EstadoHistorico.js";
 import { fincasConfig } from "./config/fincas.js";
 import logger from "./utils/logger.js";
-import "dotenv/config";
 
 const MONITOR_INTERVAL = parseInt(process.env.MONITOR_INTERVAL) || 60000;
 const MAX_ERROR_COUNT = parseInt(process.env.MAX_ERROR_COUNT) || 5;
@@ -330,7 +330,7 @@ async function monitorearDispositivos(fincaId) {
   await Promise.all(tareas);
   await broadcastYGuardar(fincaId);
 
-  logger.info(`[${fincaId}] ✅ Monitoreo SNMP completado\n`);
+  logger.info(`[${fincaId}] Monitoreo SNMP completado\n`);
 }
 
 async function main() {
@@ -396,7 +396,7 @@ const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
 
   if (Object.keys(monitores).length === 0) {
     logger.error(
-      "No se cargó ninguna finca. Verifica config/fincas.js y que exista al menos un ap_ptp.js.",
+      " No se cargó ninguna finca. Verifica config/fincas.js y que exista al menos un ap_ptp.js.",
     );
     process.exit(1);
   }
@@ -438,7 +438,7 @@ const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
   }
 
   logger.info(
-    `\nMonitoreo activo para ${Object.keys(monitores).length} finca(s): ${Object.keys(monitores).join(", ")}`,
+    `\n Monitoreo activo para ${Object.keys(monitores).length} finca(s): ${Object.keys(monitores).join(", ")}`,
   );
 }
 
@@ -447,7 +447,7 @@ process.on("unhandledRejection", (error) => {
 });
 
 process.on("SIGINT", () => {
-  logger.info("\n\nDeteniendo sistema de monitoreo...");
+  logger.info("\n\n Deteniendo sistema de monitoreo...");
   process.exit(0);
 });
 

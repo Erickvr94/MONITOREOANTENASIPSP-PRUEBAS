@@ -18,7 +18,7 @@ export async function cargarCoordenadas(fincaId) {
     );
   } catch {
     coordenadasPorFinca[fincaId] = {};
-    logger.warn(`[${fincaId}]  Sin coordenadas—el mapa tendrá lat/lon null`);
+    logger.warn(`[${fincaId}] ⚠️  Sin coordenadas.json — el mapa tendrá lat/lon null`);
   }
 }
 
@@ -50,7 +50,9 @@ export function construirDatosMapa(fincaId, monitor) {
       // Equipo encendido pero sin enlace de radio (ej: extremo PTP apagado)
       if (estadoOnline === true && detalle.potencia == null) enlacesCaidos++;
 
-      const coord = coords[nombre];
+      // Prioridad: "Grupo.Nombre" (para fincas con nombres repetidos entre
+      // grupos, ej. Taura) y si no existe, el nombre simple (ej. California).
+      const coord = coords[key] ?? coords[nombre];
       antenas.push({
         id: key,
         nombre,
