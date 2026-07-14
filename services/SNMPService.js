@@ -53,8 +53,10 @@ export async function consultarSNMP(ip, oid) {
         } else {
           finish({
             online: resultados.length > 0,
-            value: resultados.length > 0 ? Number(resultados[0]) : null,
-            count: resultados.length,
+            potencia: resultados.length ? Number(resultados[0]): null,
+            raw: resultados,
+            fecha: new Date().toISOString(),
+            error: null
           });
         }
       },
