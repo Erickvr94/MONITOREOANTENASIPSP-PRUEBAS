@@ -18,7 +18,7 @@ export async function cargarCoordenadas(fincaId) {
     );
   } catch {
     coordenadasPorFinca[fincaId] = {};
-    logger.warn(`[${fincaId}] ⚠️  Sin coordenadas.json — el mapa tendrá lat/lon null`);
+    logger.warn(`[${fincaId}] Sin coordenadas—el mapa tendrá lat/lon null`);
   }
 }
 
@@ -47,8 +47,12 @@ export function construirDatosMapa(fincaId, monitor) {
       else if (estadoOnline === false) offline++;
       else sinDatos++;
 
-      // Equipo encendido pero sin enlace de radio (ej: extremo PTP apagado)
-      if (estadoOnline === true && detalle.potencia == null) enlacesCaidos++;
+      const tipo = info.Tipo ?? "antena";
+
+      //Antena encendida pero sin enlace de radio 
+      //Los equipos (HMI/PLC/RB) no llevan potencia: no cuentan aquí.
+      if (estadoOnline === true && detalle.potencia == null && tipo === "antena")
+        enlacesCaidos++;
 
       // Prioridad: "Grupo.Nombre" (para fincas con nombres repetidos entre
       // grupos, ej. Taura) y si no existe, el nombre simple (ej. California).
@@ -57,6 +61,7 @@ export function construirDatosMapa(fincaId, monitor) {
         id: key,
         nombre,
         grupo,
+        tipo,
         ip: info.IP,
         ubicacion: info.Ubicacion ?? null,
         coordenadas: {
@@ -66,7 +71,7 @@ export function construirDatosMapa(fincaId, monitor) {
         estado: {
           online: estadoOnline,                       // true = responde sysUpTime (encendida) | false | null (aún sin ciclo)
           potencia: detalle.potencia ?? null,          // dBm, null si el enlace no existe (ej: PTP remoto apagado)
-          fecha: detalle.ultimaActualizacion ?? null,  // ISO 8601 del último ciclo SNMP
+          fecha: detalle.ultimaActualizacion ?? null, 
         },
         error: detalle.error ?? null,
       });

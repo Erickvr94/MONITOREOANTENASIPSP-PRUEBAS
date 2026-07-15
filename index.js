@@ -283,6 +283,27 @@ async function broadcastYGuardar(fincaId) {
   }
 }
 
+/**
+ * Verifica un equipo de red por PING (HMI, PLC, Raspberry...).
+ * Devuelve la misma forma que consultarDispositivo para reutilizar
+ * todo el flujo (estado, broadcast, BD, mapa) sin cambios.
+ */
+async function verificarEquipoPing(ip) {
+  try {
+    // Windows usa -n para el número de ecos; Linux/Mac usan -c
+    const extra = process.platform === "win32" ? ["-n", "2"] : ["-c", "2"];
+    const res = await ping.promise.probe(ip, { timeout: 4, extra });
+    return {
+      online: res.alive,
+      potencia: null,
+      error: res.alive ? null : "Sin respuesta a ping",
+      fecha: new Date().toISOString(),
+    };
+  } catch (e) {
+    return { online: false, potencia: null, error: e.message, fecha: new Date().toISOString() };
+  }
+}
+
 async function monitorearDispositivos(fincaId) {
   const { config: { direccionesIP }, estado } = monitores[fincaId];
 
@@ -294,8 +315,13 @@ async function monitorearDispositivos(fincaId) {
     for (const [nombre, info] of Object.entries(devices)) {
       const key = `${grupo}.${nombre}`;
 
+      // Antenas (con OID)SNMP; equipos (sin OID) ping
+      const consulta = info.OID
+        ? consultarDispositivo(info.IP, info.OID)
+        : verificarEquipoPing(info.IP);
+
       tareas.push(
-        consultarDispositivo(info.IP, info.OID).then((resultado) => {
+        consulta.then((resultado) => {
           const estadoAnterior = estado.dispositivos[key];
           const estadoActual = resultado.online;
 
@@ -334,12 +360,7 @@ async function monitorearDispositivos(fincaId) {
 }
 
 async function main() {
-  logger.info("╔═══════════════════════════════════════════════════════════╗");
-  logger.info("║   SISTEMA DE MONITOREO DE ANTENAS Y GATEWAYS IPSP        ║");
-  logger.info(
-    "╚═══════════════════════════════════════════════════════════╝\n",
-  );
-
+  logger.info("║   SISTEMA DE MONITOREO DE ANTENAS Y GATEWAYS IPSP   ║\n");
   const conn = await connectDatabase();
 
   for (const [fincaId, meta] of Object.entries(fincasConfig)) {
@@ -352,7 +373,7 @@ async function main() {
       direccionesIP = dp;
     } catch {
       logger.warn(
-        `[${fincaId}] ⚠️  No se encontró config/fincas/${fincaId}/ap_ptp.js — omitiendo`,
+        `[${fincaId}]  No se encontró config/fincas/${fincaId}/ap_ptp.js — omitiendo`,
       );
       continue;
     }
@@ -377,8 +398,24 @@ const modelo = conn ? crearModeloEstadoHistorico(conn, fincaId) : null;
 
     await cargarCoordenadas(fincaId);
 
+    // Equipos de red (HMI, PLC, Raspberry...) — archivo opcional por finca.
+    // Se integran como un grupo más "Equipos" y se monitorean por PING.
+    let direccionesIPCompleto = direccionesIP;
+    for (const archivo of ["equipos", "equipos_camp"]) {
+      try {
+        const { equipos } = await import(`./config/fincas/${fincaId}/${archivo}.js`);
+        if (equipos && Object.keys(equipos).length) {
+          direccionesIPCompleto = { ...direccionesIP, Equipos: equipos };
+          logger.info(`[${fincaId}] 🖥️  Equipos de red cargados (${archivo}.js): ${Object.keys(equipos).length}`);
+          break;
+        }
+      } catch {
+        /* la finca no tiene este archivo — probar el siguiente nombre */
+      }
+    }
+
     monitores[fincaId] = {
-      config: { direcciones, direccionesIP },
+      config: { direcciones, direccionesIP: direccionesIPCompleto },
       estado: {
         gateways: {},
         detalleGateways: {},
